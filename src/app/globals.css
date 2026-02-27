@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: #0a2a0a;
+  color: white;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  overscroll-behavior: none;
+  user-select: none;
+}
+
+canvas {
+  touch-action: none;
+  display: block;
+}
