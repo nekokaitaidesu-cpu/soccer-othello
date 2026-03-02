@@ -4,27 +4,46 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import GameCanvas, { GameCanvasHandle } from "@/components/GameCanvas";
 import type { Sensitivity } from "@/components/GameCanvas";
-import type { Player, BoardSize } from "@/lib/gameLogic";
-// Player 型はホスト側の先後ランダム割り当てにも使用
+import type { Player, BoardSize, Board } from "@/lib/gameLogic";
+import { getCPUMove } from "@/lib/gameLogic";
 import type { DataConnection } from "peerjs";
-// peerjs は dynamic import でブラウザ側のみロード
 
 const PEER_PREFIX = "soc-";
+const CPU_THINK_DELAY = 700;
+
+// ターン順ヘルパー（gameLogicのgetNextPlayerと同じロジック）
+function nextPlayer(current: Player, pc: 2 | 3): Player {
+  if (pc === 2) return current === "black" ? "white" : "black";
+  if (current === "black") return "white";
+  if (current === "white") return "red";
+  return "black";
+}
 
 type OnlineState =
   | "menu"
   | "creating"
-  | "waiting"
+  | "waiting_1"    // ホスト: ゲスト1待ち
+  | "waiting_2"    // ホスト(3人): ゲスト2待ち
   | "joining"
   | "playing"
   | "opponent_left";
 
 type GameMessage =
-  | { type: "game_start"; guestColor: Player; boardSize: BoardSize }
-  | { type: "move"; row: number; col: number };
+  | { type: "game_start"; myColor: Player; boardSize: BoardSize; playerCount: 2 | 3 }
+  | { type: "move"; row: number; col: number; player: Player }
+  | { type: "player_left"; leftColor: Player };
 
 function generateRoomCode(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+function shuffleColors(count: 2 | 3): Player[] {
+  const all: Player[] = count === 3 ? ["black", "white", "red"] : ["black", "white"];
+  for (let i = all.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [all[i], all[j]] = [all[j], all[i]];
+  }
+  return all;
 }
 
 export default function OnlinePage() {
@@ -34,61 +53,177 @@ export default function OnlinePage() {
   const [myColor, setMyColor] = useState<Player>("black");
   const [errorMsg, setErrorMsg] = useState("");
   const [selectedSize, setSelectedSize] = useState<BoardSize>(6);
+  const [selectedPlayerCount, setSelectedPlayerCount] = useState<2 | 3>(2);
   const [gameBoardSize, setGameBoardSize] = useState<BoardSize>(6);
+  const [gamePlayerCount, setGamePlayerCount] = useState<2 | 3>(2);
   const [sensitivity, setSensitivity] = useState<Sensitivity>(1);
+  const [disconnectedMsg, setDisconnectedMsg] = useState("");
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const peerRef = useRef<any>(null);
-  const connRef = useRef<DataConnection | null>(null);
+  const conn1Ref = useRef<DataConnection | null>(null); // ゲスト1 or ホストへの接続
+  const conn2Ref = useRef<DataConnection | null>(null); // ゲスト2（ホスト3人時）
   const gameRef = useRef<GameCanvasHandle>(null);
   const onlineStateRef = useRef<OnlineState>("menu");
+  const isHostRef = useRef(false);
+  const gamePcRef = useRef<2 | 3>(2);
+  const myColorRef = useRef<Player>("black");
+  const disconnectedColorsRef = useRef<Player[]>([]);
 
-  useEffect(() => {
-    onlineStateRef.current = onlineState;
-  }, [onlineState]);
+  useEffect(() => { onlineStateRef.current = onlineState; }, [onlineState]);
+  useEffect(() => { myColorRef.current = myColor; }, [myColor]);
 
   const destroyPeer = useCallback(() => {
-    connRef.current?.close();
+    conn1Ref.current?.close();
+    conn2Ref.current?.close();
     peerRef.current?.destroy();
-    connRef.current = null;
+    conn1Ref.current = null;
+    conn2Ref.current = null;
     peerRef.current = null;
+    isHostRef.current = false;
+    disconnectedColorsRef.current = [];
   }, []);
 
-  useEffect(() => {
-    return () => destroyPeer();
+  useEffect(() => { return () => destroyPeer(); }, [destroyPeer]);
+
+  // ============================================================
+  // CPU代替投球（切断したプレイヤーの代わりにホストが投げる）
+  // ============================================================
+  const triggerCPUForDisconnected = useCallback((cpuColor: Player) => {
+    const board: Board | undefined = gameRef.current?.getBoard();
+    if (!board) return;
+    const bs = board.length;
+    // かんたん（完全ランダム）
+    const row = Math.floor(Math.random() * bs);
+    const col = Math.floor(Math.random() * bs);
+    // 自分のキャンバスに適用
+    gameRef.current?.applyExternalMove(row, col, cpuColor);
+    // 相手ゲストに送信
+    const msg: GameMessage = { type: "move", row, col, player: cpuColor };
+    conn1Ref.current?.send(msg);
+    conn2Ref.current?.send(msg);
+  }, []);
+
+  // ターン変更コールバック（切断プレイヤーのターンならCPU代替）
+  const handleTurnChange = useCallback((newPlayer: Player) => {
+    if (!isHostRef.current) return;
+    if (!disconnectedColorsRef.current.includes(newPlayer)) return;
+    setTimeout(() => triggerCPUForDisconnected(newPlayer), CPU_THINK_DELAY);
+  }, [triggerCPUForDisconnected]);
+
+  // ============================================================
+  // 自分の手を送信
+  // ============================================================
+  const sendMove = useCallback((row: number, col: number, player: Player) => {
+    const msg: GameMessage = { type: "move", row, col, player };
+    conn1Ref.current?.send(msg);
+    conn2Ref.current?.send(msg);
+  }, []);
+
+  // ============================================================
+  // 切断処理（ホスト用）
+  // ============================================================
+  const handleGuestDisconnect = useCallback((leftColor: Player) => {
+    disconnectedColorsRef.current = [...disconnectedColorsRef.current, leftColor];
+    const remainingConns = [conn1Ref.current, conn2Ref.current].filter(Boolean).length;
+    if (remainingConns === 0) {
+      // 全員退出 → メニューへ
+      setOnlineState("opponent_left");
+      destroyPeer();
+      return;
+    }
+    setDisconnectedMsg(`${leftColor === "black" ? "⚫黒" : leftColor === "white" ? "⚪白" : "🔴赤"}が切断しました。CPUが代わります`);
+    // 残ったゲストに通知
+    const notifyMsg: GameMessage = { type: "player_left", leftColor };
+    conn1Ref.current?.send(notifyMsg);
+    conn2Ref.current?.send(notifyMsg);
   }, [destroyPeer]);
 
   // ============================================================
-  // 接続セットアップ（共通）
+  // 接続セットアップ（ゲスト側）
   // ============================================================
-  const setupConn = useCallback(
-    (conn: DataConnection) => {
-      connRef.current = conn;
+  const setupConnAsGuest = useCallback((conn: DataConnection) => {
+    conn1Ref.current = conn;
 
-      conn.on("data", (data) => {
-        const msg = data as GameMessage;
-        if (msg.type === "game_start") {
-          setMyColor(msg.guestColor);
-          setGameBoardSize(msg.boardSize);
-          setOnlineState("playing");
-        } else if (msg.type === "move") {
-          gameRef.current?.applyExternalMove(msg.row, msg.col);
-        }
-      });
+    conn.on("data", (data) => {
+      const msg = data as GameMessage;
+      if (msg.type === "game_start") {
+        setMyColor(msg.myColor);
+        myColorRef.current = msg.myColor;
+        setGameBoardSize(msg.boardSize);
+        setGamePlayerCount(msg.playerCount);
+        gamePcRef.current = msg.playerCount;
+        setOnlineState("playing");
+      } else if (msg.type === "move") {
+        gameRef.current?.applyExternalMove(msg.row, msg.col, msg.player);
+      } else if (msg.type === "player_left") {
+        setDisconnectedMsg(
+          `${msg.leftColor === "black" ? "⚫黒" : msg.leftColor === "white" ? "⚪白" : "🔴赤"}が切断しました。CPUが代わります`
+        );
+        disconnectedColorsRef.current = [...disconnectedColorsRef.current, msg.leftColor];
+      }
+    });
 
-      conn.on("close", () => {
-        setOnlineState("opponent_left");
-        destroyPeer();
-      });
+    conn.on("close", () => {
+      setOnlineState("opponent_left");
+      destroyPeer();
+    });
 
-      conn.on("error", () => {
-        setErrorMsg("接続エラーが発生しました");
-        setOnlineState("menu");
-        destroyPeer();
-      });
-    },
-    [destroyPeer]
-  );
+    conn.on("error", () => {
+      setErrorMsg("接続エラーが発生しました");
+      setOnlineState("menu");
+      destroyPeer();
+    });
+  }, [destroyPeer]);
+
+  // ============================================================
+  // 接続セットアップ（ホスト用 - ゲスト1）
+  // ============================================================
+  const setupConn1AsHost = useCallback((conn: DataConnection, assignedColor: Player, pc: 2 | 3, bs: BoardSize, guestColors: Player[]) => {
+    conn1Ref.current = conn;
+
+    conn.on("data", (data) => {
+      const msg = data as GameMessage;
+      if (msg.type === "move") {
+        // 自分のキャンバスに適用
+        gameRef.current?.applyExternalMove(msg.row, msg.col, msg.player);
+        // 3人なら ゲスト2 にもリレー
+        conn2Ref.current?.send(msg);
+      }
+    });
+
+    conn.on("close", () => {
+      handleGuestDisconnect(assignedColor);
+    });
+
+    conn.on("error", () => {
+      setErrorMsg("接続エラー");
+    });
+  }, [handleGuestDisconnect]);
+
+  // ============================================================
+  // 接続セットアップ（ホスト用 - ゲスト2）
+  // ============================================================
+  const setupConn2AsHost = useCallback((conn: DataConnection, assignedColor: Player) => {
+    conn2Ref.current = conn;
+
+    conn.on("data", (data) => {
+      const msg = data as GameMessage;
+      if (msg.type === "move") {
+        gameRef.current?.applyExternalMove(msg.row, msg.col, msg.player);
+        // ゲスト1にリレー
+        conn1Ref.current?.send(msg);
+      }
+    });
+
+    conn.on("close", () => {
+      handleGuestDisconnect(assignedColor);
+    });
+
+    conn.on("error", () => {
+      setErrorMsg("接続エラー");
+    });
+  }, [handleGuestDisconnect]);
 
   // ============================================================
   // 部屋を作る（ホスト）
@@ -98,6 +233,7 @@ export default function OnlinePage() {
     const code = generateRoomCode();
     setRoomCode(code);
     setOnlineState("creating");
+    isHostRef.current = true;
 
     const { default: Peer } = await import("peerjs");
     const peer = new Peer(`${PEER_PREFIX}${code}`);
@@ -114,22 +250,52 @@ export default function OnlinePage() {
     });
 
     peer.on("open", () => {
-      setOnlineState("waiting");
+      setOnlineState("waiting_1");
     });
 
+    const pc = selectedPlayerCount;
+    const bs = selectedSize;
+    const colors = shuffleColors(pc);
+    const hostColor = colors[0];
+
+    let guestCount = 0;
+
     peer.on("connection", (conn: DataConnection) => {
-      setupConn(conn);
-      conn.on("open", () => {
-        const bs = selectedSize;
-        // 先攻・後攻をランダムに決める
-        const hostIsBlack = Math.random() < 0.5;
-        const hostColor: Player = hostIsBlack ? "black" : "white";
-        const guestColor: Player = hostIsBlack ? "white" : "black";
-        conn.send({ type: "game_start", guestColor, boardSize: bs } as GameMessage);
-        setGameBoardSize(bs);
-        setMyColor(hostColor);
-        setOnlineState("playing");
-      });
+      guestCount++;
+      const guestColor = colors[guestCount]; // colors[1] for guest1, colors[2] for guest2
+
+      if (pc === 2) {
+        // 2人対戦: ゲスト接続即スタート
+        setupConn1AsHost(conn, guestColor, pc, bs, colors);
+        conn.on("open", () => {
+          conn.send({ type: "game_start", myColor: guestColor, boardSize: bs, playerCount: pc } as GameMessage);
+          setGameBoardSize(bs);
+          setGamePlayerCount(pc);
+          gamePcRef.current = pc;
+          setMyColor(hostColor);
+          myColorRef.current = hostColor;
+          setOnlineState("playing");
+        });
+      } else {
+        // 3人対戦
+        if (guestCount === 1) {
+          setupConn1AsHost(conn, guestColor, pc, bs, colors);
+          setOnlineState("waiting_2");
+        } else if (guestCount === 2) {
+          setupConn2AsHost(conn, guestColor);
+          // 両ゲストにゲームスタート送信
+          conn.on("open", () => {
+            conn1Ref.current?.send({ type: "game_start", myColor: colors[1], boardSize: bs, playerCount: pc } as GameMessage);
+            conn.send({ type: "game_start", myColor: colors[2], boardSize: bs, playerCount: pc } as GameMessage);
+            setGameBoardSize(bs);
+            setGamePlayerCount(pc);
+            gamePcRef.current = pc;
+            setMyColor(hostColor);
+            myColorRef.current = hostColor;
+            setOnlineState("playing");
+          });
+        }
+      }
     });
   };
 
@@ -150,14 +316,11 @@ export default function OnlinePage() {
 
     peer.on("open", () => {
       const conn = peer.connect(`${PEER_PREFIX}${inputCode}`, { reliable: true });
-      setupConn(conn);
-
+      setupConnAsGuest(conn);
       conn.on("open", () => {
         setRoomCode(inputCode);
-        // ホストから game_start が来るまで待つ
       });
 
-      // 接続タイムアウト（10秒）
       setTimeout(() => {
         if (onlineStateRef.current === "joining") {
           setErrorMsg("ホストに接続できませんでした。コードを確認してください。");
@@ -175,13 +338,6 @@ export default function OnlinePage() {
   };
 
   // ============================================================
-  // 自分の手を送信
-  // ============================================================
-  const sendMove = useCallback((row: number, col: number) => {
-    connRef.current?.send({ type: "move", row, col } as GameMessage);
-  }, []);
-
-  // ============================================================
   // 部屋を出る
   // ============================================================
   const exitRoom = () => {
@@ -191,13 +347,19 @@ export default function OnlinePage() {
     setInputCode("");
     setErrorMsg("");
     setSelectedSize(6);
+    setSelectedPlayerCount(2);
     setGameBoardSize(6);
+    setGamePlayerCount(2);
     setSensitivity(1);
+    setDisconnectedMsg("");
   };
 
   // ============================================================
   // UI
   // ============================================================
+  const colorLabel = (p: Player) => p === "black" ? "⚫黒" : p === "white" ? "⚪白" : "🔴赤";
+  const waitingCount = onlineState === "waiting_2" ? "1/2" : "0/2";
+
   return (
     <div className="min-h-screen flex flex-col items-center bg-green-950">
       {/* ヘッダー */}
@@ -210,7 +372,7 @@ export default function OnlinePage() {
         <h1 className="text-white font-bold text-lg">🌐 ONLINEモード</h1>
         {onlineState === "playing" && (
           <span className="ml-3 text-green-300 text-xs">
-            部屋: {roomCode} / あなたは{myColor === "black" ? "⚫黒" : "⚪白"}
+            部屋: {roomCode} / あなたは{colorLabel(myColor)}
           </span>
         )}
       </div>
@@ -223,6 +385,27 @@ export default function OnlinePage() {
           )}
           {errorMsg && <p className="text-red-400 text-sm">{errorMsg}</p>}
 
+          {/* 対戦人数 */}
+          <div className="w-full bg-green-900 rounded-2xl p-4 shadow-lg">
+            <p className="text-white font-bold text-sm mb-2">対戦人数（部屋を作る人が選択）</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setSelectedPlayerCount(2)}
+                className={`flex-1 py-3 rounded-xl font-bold text-lg transition-all ${selectedPlayerCount === 2 ? "bg-green-500 text-white" : "bg-green-800 text-green-300"}`}
+              >
+                2人
+                <p className="text-xs font-normal opacity-80">⚫ vs ⚪</p>
+              </button>
+              <button
+                onClick={() => setSelectedPlayerCount(3)}
+                className={`flex-1 py-3 rounded-xl font-bold text-lg transition-all ${selectedPlayerCount === 3 ? "bg-purple-500 text-white" : "bg-green-800 text-green-300"}`}
+              >
+                3人
+                <p className="text-xs font-normal opacity-80">⚫⚪🔴</p>
+              </button>
+            </div>
+          </div>
+
           {/* 盤面サイズ選択 */}
           <div className="w-full bg-green-900 rounded-2xl p-4 shadow-lg">
             <p className="text-white font-bold text-sm mb-2">盤面サイズ（部屋を作る人が選択）</p>
@@ -232,14 +415,12 @@ export default function OnlinePage() {
                 className={`flex-1 py-3 rounded-xl font-bold text-lg transition-all ${selectedSize === 6 ? "bg-green-500 text-white" : "bg-green-800 text-green-300"}`}
               >
                 6×6
-                <p className="text-xs font-normal opacity-80">34手</p>
               </button>
               <button
                 onClick={() => setSelectedSize(8)}
                 className={`flex-1 py-3 rounded-xl font-bold text-lg transition-all ${selectedSize === 8 ? "bg-blue-500 text-white" : "bg-green-800 text-green-300"}`}
               >
                 8×8
-                <p className="text-xs font-normal opacity-80">62手</p>
               </button>
             </div>
           </div>
@@ -301,18 +482,23 @@ export default function OnlinePage() {
       )}
 
       {/* 待機画面 */}
-      {(onlineState === "waiting" || onlineState === "creating" || onlineState === "joining") && (
+      {(onlineState === "waiting_1" || onlineState === "waiting_2" || onlineState === "creating" || onlineState === "joining") && (
         <div className="flex-1 flex flex-col items-center justify-center px-6 gap-6">
           <div className="text-center">
             <div className="text-6xl mb-4 animate-bounce">⏳</div>
-            {onlineState === "waiting" && (
+            {(onlineState === "waiting_1" || onlineState === "waiting_2") && (
               <>
                 <p className="text-white text-xl font-bold mb-2">部屋コード</p>
                 <p className="text-6xl font-mono font-black text-green-400 tracking-[0.2em] mb-4">
                   {roomCode}
                 </p>
                 <p className="text-green-300 text-sm">友だちにこのコードを伝えよう</p>
-                <p className="text-green-400 text-xs mt-1 animate-pulse">相手の接続を待っています...</p>
+                {selectedPlayerCount === 3 && (
+                  <p className="text-purple-300 text-sm mt-1">
+                    参加者 {waitingCount} 人（あと{onlineState === "waiting_1" ? 2 : 1}人待ち）
+                  </p>
+                )}
+                <p className="text-green-400 text-xs mt-1 animate-pulse">接続を待っています...</p>
               </>
             )}
             {onlineState === "joining" && (
@@ -333,14 +519,21 @@ export default function OnlinePage() {
 
       {/* ゲーム画面 */}
       {onlineState === "playing" && (
-        <div className="w-full flex justify-center px-2 pt-2">
+        <div className="w-full flex flex-col items-center px-2 pt-2">
+          {disconnectedMsg && (
+            <p className="text-yellow-400 text-sm mb-2 bg-yellow-900/40 px-4 py-2 rounded-xl">
+              ⚠️ {disconnectedMsg}（よわいCPUが代打）
+            </p>
+          )}
           <GameCanvas
             ref={gameRef}
             mode="online"
             myColor={myColor}
             boardSize={gameBoardSize}
+            playerCount={gamePlayerCount}
             sensitivity={sensitivity}
             onMove={sendMove}
+            onTurnChange={handleTurnChange}
           />
         </div>
       )}

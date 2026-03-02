@@ -25,7 +25,8 @@ import {
 // 型定義
 // ============================================================
 export interface GameCanvasHandle {
-  applyExternalMove: (row: number, col: number) => void;
+  applyExternalMove: (row: number, col: number, player: Player) => void;
+  getBoard: () => Board;
 }
 
 export type Sensitivity = 1 | 2 | 3;
@@ -38,7 +39,8 @@ export interface GameCanvasProps {
   sensitivity?: Sensitivity;
   difficulty?: Difficulty;
   playerCount?: 2 | 3;
-  onMove?: (row: number, col: number) => void;
+  onMove?: (row: number, col: number, player: Player) => void;
+  onTurnChange?: (newPlayer: Player) => void;
 }
 
 const SENSITIVITY_SCALE: Record<Sensitivity, number> = {
@@ -281,7 +283,7 @@ function lerp(a: number, b: number, t: number) {
 // GameCanvas コンポーネント
 // ============================================================
 const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
-  function GameCanvas({ mode, myColor = "black", boardSize = 6, sensitivity = 1, difficulty = "normal", playerCount = 2, onMove }, ref) {
+  function GameCanvas({ mode, myColor = "black", boardSize = 6, sensitivity = 1, difficulty = "normal", playerCount = 2, onMove, onTurnChange }, ref) {
     const velocityScale = SENSITIVITY_SCALE[sensitivity];
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -346,6 +348,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const animFrameRef = useRef(0);
     const onMoveRef = useRef(onMove);
     useEffect(() => { onMoveRef.current = onMove; }, [onMove]);
+    const onTurnChangeRef = useRef(onTurnChange);
+    useEffect(() => { onTurnChangeRef.current = onTurnChange; }, [onTurnChange]);
 
     // ============================================================
     // レイアウト計算
@@ -553,9 +557,9 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           });
         }
 
-        // online: 最終着弾マスが確定したここで送信
+        // online: 最終着弾マスが確定したここで送信（playerも含めて送る）
         if (mode === "online" && player === myColor) {
-          onMoveRef.current?.(row, col);
+          onMoveRef.current?.(row, col, player);
         }
 
         boardRef.current = result.newBoard;
@@ -591,6 +595,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           currentPlayerRef.current = next;
           gamePhaseRef.current = "idle";
           impactCellRef.current = null;
+          onTurnChangeRef.current?.(next);
 
           if (mode === "cpu" && next !== myColor) {
             gamePhaseRef.current = "cpu_thinking";
@@ -608,16 +613,19 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     // 外部からの着弾（ONLINEモード）
     // ============================================================
     useImperativeHandle(ref, () => ({
-      applyExternalMove(row: number, col: number) {
+      applyExternalMove(row: number, col: number, player: Player) {
         if (gamePhaseRef.current !== "idle") return;
         if (row === -1 && col === -1) {
-          currentPlayerRef.current = myColor;
+          // off-board シグナル: playerのターンをスキップ
+          currentPlayerRef.current = getNextPlayer(player, playerCountRef.current);
           gamePhaseRef.current = "idle";
           syncDisplayState();
           return;
         }
-        const opponent: Player = myColor === "black" ? "white" : "black";
-        throwBall(row, col, opponent);
+        throwBall(row, col, player);
+      },
+      getBoard() {
+        return boardRef.current;
       },
     }));
 
@@ -718,8 +726,9 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
               currentPlayerRef.current = next;
               gamePhaseRef.current = "idle";
               if (mode === "online" && anim.player === myColor) {
-                onMoveRef.current?.(-1, -1);
+                onMoveRef.current?.(-1, -1, anim.player);
               }
+              onTurnChangeRef.current?.(next);
               if (mode === "cpu" && next !== myColor) {
                 gamePhaseRef.current = "cpu_thinking";
                 syncDisplayState();
