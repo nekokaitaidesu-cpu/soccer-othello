@@ -105,54 +105,58 @@ const ARC_FACTOR = 0.6;
 const ARC_BASE   = 60;
 
 // ============================================================
-// ユーザーのスワイプ速度から「どのセルに着弾するか」を計算
-// 盤面底辺(boardY+boardH)を下から上へ通過したときの状態で判断:
-//   列 → 通過時のX座標
-//   行 → 通過時の上昇速度（速い＝上の行、遅い＝下の行）
+// スワイプ速度から「どのセルに着弾するか」を直接計算
+//
+// 【行の決め方】
+//   エネルギー保存則で「ボール休止位置(ballRestY)から盤面底辺(boardBottom)に
+//   到達したとき残る上昇速度 v0_board」を求め、そこから更に届く高さで行を決定。
+//   vy が弱くて boardBottom まで届かない場合は row=7（最前列）に強制着弾。
+//
+// 【列の決め方】
+//   boardBottom 到達までの飛行時間 t を使い、
+//   dragX + vx*t で横方向の着弾X座標を計算。届かない場合は放物線頂点のXで代用。
+//
+// → 必ず 0-7 の valid なセルを返す（ミスなし）
 // ============================================================
-function computeTargetFromThrow(
-  startX: number,
-  startY: number,
+function computeTargetFromVelocity(
+  dragX: number,       // ドラッグ離した位置X（横方向の起点）
   vx: number,
   vy: number,
-  boardX: number,
-  boardY: number,
-  boardH: number,
-  boardW: number,
-  cellSize: number,
-  canvasW: number,
-  canvasH: number
-): { row: number; col: number } | null {
-  let px = startX, py = startY, pvx = vx, pvy = vy;
-  const boardBottom = boardY + boardH;
-
-  for (let i = 0; i < 400; i++) {
-    const prevPy = py;
-    px += pvx;
-    py += pvy;
-    pvy += GRAVITY;
-
-    // 盤面底辺を下から上へ通過
-    if (prevPy > boardBottom && py <= boardBottom) {
-      const col = Math.floor((px - boardX) / cellSize);
-      if (col < 0 || col >= BOARD_SIZE) return null; // 横外れ
-
-      // 通過時の上昇速度で行を決定（速い→上の行、遅い→下の行）
-      const v0 = Math.max(0, -(pvy - GRAVITY)); // このステップで使った速度（GRAVITY加算前）
-      const maxReach = (v0 * v0) / (2 * GRAVITY);
-      const row = Math.max(
-        0,
-        Math.min(BOARD_SIZE - 1, Math.floor((boardH - maxReach) / cellSize))
-      );
-      return { row, col };
-    }
-
-    // 画面外 → ミス
-    if (py > canvasH + 200 || px < -200 || px > canvasW + 200 || py < boardY - 200) {
-      return null;
-    }
+  L: {
+    ballRestY: number;
+    boardX: number; boardY: number; boardH: number;
+    cellSize: number;
   }
-  return null;
+): { row: number; col: number } {
+  const boardBottom = L.boardY + L.boardH;
+  const heightDiff = L.ballRestY - boardBottom; // 正値 ≈ 91px（ボール静止位置から盤面底辺まで）
+
+  // -- 行の計算 --
+  // v0_board^2 = vy^2 - 2*g*heightDiff  （エネルギー保存）
+  const v0BoardSq = vy * vy - 2 * GRAVITY * heightDiff;
+  let row: number;
+  let tToCross: number; // boardBottom に到達するまでの時間
+
+  if (v0BoardSq <= 0) {
+    // 弱いスワイプ → boardBottom まで届かない → 最前列(row7)に着弾
+    row = BOARD_SIZE - 1;
+    // 放物線の頂点時刻を代用（横方向計算用）
+    tToCross = -vy / GRAVITY; // apex time
+  } else {
+    const v0Board = Math.sqrt(v0BoardSq);
+    const maxReach = (v0Board * v0Board) / (2 * GRAVITY);
+    row = Math.max(0, Math.min(BOARD_SIZE - 1, Math.floor((L.boardH - maxReach) / L.cellSize)));
+
+    // boardBottom 到達時間：0.5*g*t^2 + vy*t + heightDiff = 0
+    // → t = (-vy - sqrt(v0BoardSq)) / g  （小さい正の根）
+    tToCross = (-vy - v0Board) / GRAVITY;
+  }
+
+  // -- 列の計算 --
+  const xAtCross = dragX + vx * tToCross;
+  const col = Math.max(0, Math.min(BOARD_SIZE - 1, Math.floor((xAtCross - L.boardX) / L.cellSize)));
+
+  return { row, col };
 }
 
 // ============================================================
@@ -881,8 +885,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         const vx = (last.x - first.x) / dt * VELOCITY_SCALE;
         const vy = (last.y - first.y) / dt * VELOCITY_SCALE;
 
-        // 上向きの勢いがなければキャンセル
-        if (vy > -1.5) {
+        // 上向きの勢いが全くなければキャンセル（ほぼゼロ = 意図しない触れ）
+        if (vy > -0.5) {
           gamePhaseRef.current = "idle";
           syncDisplayState("上に向かってスワイプして投げよう！");
           return;
@@ -890,19 +894,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
 
         const L = layoutRef.current;
 
-        // 物理シミュレーションでどのセルに飛ぶかを計算
-        const target = computeTargetFromThrow(
-          dragPos.x, dragPos.y, vx, vy,
-          L.boardX, L.boardY, L.boardH, L.boardW,
-          L.cellSize, L.canvasW, L.canvasH
-        );
-
-        if (!target) {
-          // 盤外ミス
-          gamePhaseRef.current = "idle";
-          syncDisplayState("外れた！もう一度！");
-          return;
-        }
+        // スワイプ速度から着弾セルを直接計算（必ず valid なセルを返す）
+        const target = computeTargetFromVelocity(dragPos.x, vx, vy, L);
 
         const cp = currentPlayerRef.current;
 
