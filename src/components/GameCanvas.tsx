@@ -72,14 +72,7 @@ interface SmokeParticle {
   duration: number;
 }
 
-/** テキストポップ（ボスン等） */
-interface TextPop {
-  id: number;
-  x: number; y: number;
-  text: string;
-  startTime: number;
-  duration: number;
-}
+
 
 type GamePhase =
   | "idle"
@@ -97,6 +90,7 @@ const BALL_AREA_RATIO = 0.42;
 const BALL_REST_Y_RATIO = 0.6;
 const BALL_RADIUS_RATIO = 0.07;
 const MAX_CANVAS_W = 480;
+const SIDE_MARGIN_CELLS = 1; // 盤面左右に設ける余白（セル単位）
 const IMPACT_DURATION = 350;
 const CPU_THINK_DELAY = 700;
 const GRAVITY = 0.3;
@@ -282,7 +276,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const winnerRef = useRef<Player | "draw" | null>(null);
     const flippedCellsRef = useRef<{ row: number; col: number; startTime: number }[]>([]);
     const smokeParticlesRef = useRef<SmokeParticle[]>([]);
-    const textPopsRef = useRef<TextPop[]>([]);
     const popIdRef = useRef(0);
 
     const isDraggingRef = useRef(false);
@@ -323,13 +316,15 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       if (!container) return;
       const bs = boardSizeRef.current;
       const w = Math.min(container.clientWidth, MAX_CANVAS_W);
-      const cellSize = Math.floor(w / bs);
+      // 左右マージン込みのセルサイズ：(bs + 2*SIDE_MARGIN_CELLS) 分割
+      const cellSize = Math.floor(w / (bs + SIDE_MARGIN_CELLS * 2));
       const boardW = cellSize * bs;
+      const marginX = cellSize * SIDE_MARGIN_CELLS;
+      const canvasW = boardW + marginX * 2;
       const ballAreaH = Math.floor(boardW * BALL_AREA_RATIO);
       const ballRadius = Math.floor(boardW * BALL_RADIUS_RATIO);
-      const canvasW = boardW;
       const canvasH = HEADER_H + boardW + ballAreaH;
-      const boardX = 0;
+      const boardX = marginX;
       const boardY = HEADER_H;
       const ballAreaY = boardY + boardW;
       const ballRestX = canvasW / 2;
@@ -422,25 +417,24 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           const startY = L.boardY + row * L.cellSize + L.cellSize / 2;
 
           if (nextRow < 0 || nextRow >= bs || nextCol < 0 || nextCol >= bs) {
-            // 盤外に飛び出す → 盤面の端（キャンバス内）に向かって飛んで煙で消える
-            // 左右はX方向の端に、上下はY方向の端にクランプして必ず画面内に収める
+            // 盤外に飛び出す → 盤面の外側（マージン内）に向かって飛んで煙で消える
             let edgeX: number;
             let edgeY: number;
             let edgeArcH: number;
             if (dc !== 0) {
-              // 左右方向: 盤面の左端または右端に向かって水平に飛ぶ
+              // 左右方向: マージン領域（盤面の外）に水平に飛ぶ
               edgeX = dc < 0
-                ? L.boardX + L.ballRadius              // 左端
-                : L.boardX + L.boardW - L.ballRadius;  // 右端
+                ? L.boardX - L.cellSize * 0.55          // 盤面左外
+                : L.boardX + L.boardW + L.cellSize * 0.55; // 盤面右外
               edgeY = startY;
-              edgeArcH = 0; // 水平移動なのでアーク不要
+              edgeArcH = 0;
             } else {
-              // 上下方向: 盤面の上端または下端に向かって飛ぶ
+              // 上下方向: 盤面の上外または下外（ボールエリア内）
               edgeX = startX;
               edgeY = dr < 0
-                ? L.boardY + L.ballRadius              // 上端
-                : L.boardY + L.boardH - L.ballRadius;  // 下端
-              edgeArcH = L.cellSize * 0.3;
+                ? L.boardY - L.cellSize * 0.55          // 盤面上外（ヘッダー内）
+                : L.boardY + L.boardH + L.cellSize * 0.4; // 盤面下外（ボールエリア）
+              edgeArcH = L.cellSize * 0.25;
             }
             ballAnimRef.current = {
               active: true,
@@ -640,13 +634,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
                   duration: 700 + Math.random() * 300,
                 });
               }
-              textPopsRef.current.push({
-                id: pid,
-                x: ex, y: ey - 16,
-                text: "ボスン",
-                startTime: Date.now(),
-                duration: 900,
-              });
               ballAnimRef.current.active = false;
               // ターン交代（コマ未配置）
               const next: Player = anim.player === "black" ? "white" : "black";
@@ -779,27 +766,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           ctx.beginPath();
           ctx.arc(p.x + p.offsetX * t, p.y + p.offsetY * t, r, 0, Math.PI * 2);
           ctx.fill();
-          ctx.restore();
-        }
-
-        // テキストポップ（ボスン）
-        textPopsRef.current = textPopsRef.current.filter(
-          (p) => nowSmoke - p.startTime < p.duration
-        );
-        for (const tp of textPopsRef.current) {
-          const t = (nowSmoke - tp.startTime) / tp.duration;
-          const rise = 28 * t;
-          const alpha = t < 0.3 ? t / 0.3 : 1 - (t - 0.3) / 0.7;
-          ctx.save();
-          ctx.globalAlpha = alpha;
-          ctx.font = `bold ${L.cellSize * 0.5}px sans-serif`;
-          ctx.fillStyle = "#ffffff";
-          ctx.strokeStyle = "rgba(0,0,0,0.7)";
-          ctx.lineWidth = 3;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.strokeText(tp.text, tp.x, tp.y - rise);
-          ctx.fillText(tp.text, tp.x, tp.y - rise);
           ctx.restore();
         }
 
@@ -1131,7 +1097,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       winnerRef.current = null;
       flippedCellsRef.current = [];
       smokeParticlesRef.current = [];
-      textPopsRef.current = [];
       syncDisplayState();
     };
 
