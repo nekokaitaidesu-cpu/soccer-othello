@@ -5,6 +5,7 @@ import Link from "next/link";
 import GameCanvas, { GameCanvasHandle } from "@/components/GameCanvas";
 import type { Sensitivity } from "@/components/GameCanvas";
 import type { Player, BoardSize } from "@/lib/gameLogic";
+// Player 型はホスト側の先後ランダム割り当てにも使用
 import type { DataConnection } from "peerjs";
 // peerjs は dynamic import でブラウザ側のみロード
 
@@ -120,9 +121,13 @@ export default function OnlinePage() {
       setupConn(conn);
       conn.on("open", () => {
         const bs = selectedSize;
-        conn.send({ type: "game_start", guestColor: "white", boardSize: bs } as GameMessage);
+        // 先攻・後攻をランダムに決める
+        const hostIsBlack = Math.random() < 0.5;
+        const hostColor: Player = hostIsBlack ? "black" : "white";
+        const guestColor: Player = hostIsBlack ? "white" : "black";
+        conn.send({ type: "game_start", guestColor, boardSize: bs } as GameMessage);
         setGameBoardSize(bs);
-        setMyColor("black");
+        setMyColor(hostColor);
         setOnlineState("playing");
       });
     });

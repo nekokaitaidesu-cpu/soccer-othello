@@ -2,7 +2,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import GameCanvas from "@/components/GameCanvas";
-import type { BoardSize } from "@/lib/gameLogic";
+import type { BoardSize, Player } from "@/lib/gameLogic";
 import type { Sensitivity, Difficulty } from "@/components/GameCanvas";
 
 export default function CpuPage() {
@@ -10,6 +10,16 @@ export default function CpuPage() {
   const [sensitivity, setSensitivity] = useState<Sensitivity>(1);
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
   const [playerCount, setPlayerCount] = useState<2 | 3>(2);
+  const [myColor, setMyColor] = useState<Player>("black");
+
+  const startGame = (size: BoardSize) => {
+    const colors: Player[] = playerCount === 3
+      ? ["black", "white", "red"]
+      : ["black", "white"];
+    const picked = colors[Math.floor(Math.random() * colors.length)];
+    setMyColor(picked);
+    setBoardSize(size);
+  };
 
   if (!boardSize) {
     return (
@@ -48,17 +58,18 @@ export default function CpuPage() {
           </div>
 
           {/* 盤面サイズ */}
-          <p className="text-green-300 font-bold text-lg self-start">盤面サイズ</p>
+          <p className="text-green-300 font-bold text-lg self-start">盤面サイズを選んでスタート！</p>
+          <p className="text-green-400 text-xs self-start -mt-3">※ 色は盤面を選ぶときにランダムで決まります</p>
           <div className="w-full flex gap-3">
             <button
-              onClick={() => setBoardSize(6)}
+              onClick={() => startGame(6)}
               className="flex-1 py-5 rounded-2xl bg-gradient-to-r from-green-600 to-green-800 text-white text-2xl font-black shadow-lg active:scale-95 transition-transform"
             >
               6 × 6
-              <p className="text-xs font-normal opacity-80 mt-1">{playerCount === 3 ? "30手で終了" : "34手で終了"}</p>
+              <p className="text-xs font-normal opacity-80 mt-1">{playerCount === 3 ? "45手で終了" : "34手で終了"}</p>
             </button>
             <button
-              onClick={() => setBoardSize(8)}
+              onClick={() => startGame(8)}
               className="flex-1 py-5 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-800 text-white text-2xl font-black shadow-lg active:scale-95 transition-transform"
             >
               8 × 8
@@ -126,21 +137,21 @@ export default function CpuPage() {
     );
   }
 
-  const modeLabel = playerCount === 3
-    ? "あなた（黒） vs CPU（白） vs CPU（赤）"
-    : "あなた（黒） vs CPU（白）";
+  const colorLabel = myColor === "black" ? "⚫ 黒（先攻）"
+    : myColor === "white" ? "⚪ 白（2番目）"
+    : "🔴 赤（3番目）";
 
   return (
     <div className="min-h-screen flex flex-col items-center bg-green-950">
       <div className="w-full flex items-center px-4 py-3 bg-green-900 shadow-md">
         <button onClick={() => setBoardSize(null)} className="text-green-300 mr-3 text-lg">←</button>
         <h1 className="text-white font-bold text-lg">🤖 CPU対戦</h1>
-        <p className="text-green-400 text-xs ml-3">{boardSize}×{boardSize} ／ {modeLabel}</p>
+        <p className="text-green-400 text-xs ml-3">{boardSize}×{boardSize} ／ あなた: {colorLabel}</p>
       </div>
       <div className="w-full flex justify-center px-2 pt-2">
         <GameCanvas
           mode="cpu"
-          myColor="black"
+          myColor={myColor}
           boardSize={boardSize}
           sensitivity={sensitivity}
           difficulty={difficulty}

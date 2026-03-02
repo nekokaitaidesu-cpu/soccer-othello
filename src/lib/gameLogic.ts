@@ -39,7 +39,7 @@ export function createInitialBoard(size: BoardSize = 8, playerCount: 2 | 3 = 2):
 }
 
 export function getTurnLimit(size: BoardSize, playerCount: 2 | 3 = 2): number {
-  if (playerCount === 3) return size === 6 ? 30 : 58;
+  if (playerCount === 3) return size === 6 ? 45 : 58;
   return size === 6 ? 34 : 62;
 }
 
