@@ -261,6 +261,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const flyPieceIdRef = useRef(0);
     const moveCountRef = useRef(0);
     const winnerRef = useRef<Player | "draw" | null>(null);
+    const flippedCellsRef = useRef<{ row: number; col: number; startTime: number }[]>([]);
 
     const isDraggingRef = useRef(false);
     const ballDragPosRef = useRef({ x: 0, y: 0 });
@@ -436,6 +437,14 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         boardRef.current = result.newBoard;
         moveCountRef.current += 1;
         impactCellRef.current = { row, col };
+
+        // ひっくり返ったコマにフリップアニメーション登録
+        if (result.flipped.length > 0) {
+          const now = Date.now();
+          flippedCellsRef.current = result.flipped.map((cell) => ({
+            ...cell, startTime: now,
+          }));
+        }
         gamePhaseRef.current = "impact";
         impactTimerRef.current = Date.now();
         ballAnimRef.current.active = false;
@@ -582,6 +591,12 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         drawBoard(ctx, L, bs);
 
         // コマ描画
+        const FLIP_DURATION = 400;
+        const now = Date.now();
+        // 期限切れのフリップアニメを削除
+        flippedCellsRef.current = flippedCellsRef.current.filter(
+          (f) => now - f.startTime < FLIP_DURATION
+        );
         const board = boardRef.current;
         for (let r = 0; r < bs; r++) {
           for (let c = 0; c < bs; c++) {
@@ -590,13 +605,45 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
             const cx = L.boardX + c * L.cellSize + L.cellSize / 2;
             const cy = L.boardY + r * L.cellSize + L.cellSize / 2;
 
+            // 着弾バウンス
             let impactScale = 1;
             const ic = impactCellRef.current;
             if (ic && ic.row === r && ic.col === c && phase === "impact") {
-              const elapsed = Date.now() - impactTimerRef.current;
+              const elapsed = now - impactTimerRef.current;
               impactScale = 1 + 0.35 * Math.sin((elapsed / IMPACT_DURATION) * Math.PI);
             }
-            drawPiece(ctx, cx, cy, L.cellSize * 0.38, cell, 1, impactScale);
+
+            // ひっくり返りスケールアニメ
+            const flipInfo = flippedCellsRef.current.find((f) => f.row === r && f.col === c);
+            if (flipInfo) {
+              const t = (now - flipInfo.startTime) / FLIP_DURATION;
+              // 0→1: X方向に縮む→広がる（フリップ感）
+              const scaleX = Math.abs(Math.cos(t * Math.PI));
+              ctx.save();
+              ctx.translate(cx, cy);
+              ctx.scale(scaleX * impactScale, impactScale);
+              const grad = ctx.createRadialGradient(
+                -L.cellSize * 0.38 * 0.3, -L.cellSize * 0.38 * 0.35, L.cellSize * 0.38 * 0.05,
+                0, 0, L.cellSize * 0.38
+              );
+              if (cell === "black") {
+                grad.addColorStop(0, "#666"); grad.addColorStop(1, "#111");
+              } else {
+                grad.addColorStop(0, "#ffffff"); grad.addColorStop(1, "#cccccc");
+              }
+              ctx.shadowColor = "rgba(0,0,0,0.5)"; ctx.shadowBlur = 6; ctx.shadowOffsetY = 3;
+              ctx.fillStyle = grad;
+              ctx.beginPath();
+              ctx.arc(0, 0, L.cellSize * 0.38, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.shadowColor = "transparent";
+              ctx.strokeStyle = cell === "black" ? "#333" : "#999";
+              ctx.lineWidth = 1.5;
+              ctx.stroke();
+              ctx.restore();
+            } else {
+              drawPiece(ctx, cx, cy, L.cellSize * 0.38, cell, 1, impactScale);
+            }
           }
         }
 
@@ -931,6 +978,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       impactCellRef.current = null;
       moveCountRef.current = 0;
       winnerRef.current = null;
+      flippedCellsRef.current = [];
       syncDisplayState();
     };
 

@@ -36,8 +36,8 @@ export function determineWinner(board: Board): Player | "draw" {
 
 /**
  * コマを置く。
- * - 空マス → 自分のコマを配置
- * - 相手のコマ → 1-1交換（ひっくり返しなし）
+ * - 空マス → 自分のコマを配置 ＋ 挟んだ相手コマをひっくり返す（標準オセロルール）
+ * - 相手のコマ → 1-1直接交換のみ（ひっくり返しなし）
  * - 自分のコマ → invalid（呼び出し元でリダイレクト処理）
  */
 export function applyMove(
@@ -53,10 +53,44 @@ export function applyMove(
   if (board[row][col] === player) {
     return { newBoard: board, replaced: false, valid: false, flipped: [] };
   }
+
   const newBoard = board.map((r) => [...r]);
   const replaced = newBoard[row][col] !== null; // 相手コマを直接叩いた
   newBoard[row][col] = player;
-  return { newBoard, replaced, valid: true, flipped: [] };
+
+  // 相手コマへの直接着弾はひっくり返しなし（1-1交換のみ）
+  if (replaced) {
+    return { newBoard, replaced: true, valid: true, flipped: [] };
+  }
+
+  // 空マスへの着弾 → 8方向を確認してオセロのひっくり返し処理
+  const opponent: Player = player === "black" ? "white" : "black";
+  const directions = [
+    [-1, -1], [-1, 0], [-1, 1],
+    [0, -1],           [0, 1],
+    [1, -1],  [1, 0],  [1, 1],
+  ];
+  const flipped: { row: number; col: number }[] = [];
+
+  for (const [dr, dc] of directions) {
+    const line: { row: number; col: number }[] = [];
+    let r = row + dr;
+    let c = col + dc;
+    while (r >= 0 && r < size && c >= 0 && c < size && newBoard[r][c] === opponent) {
+      line.push({ row: r, col: c });
+      r += dr;
+      c += dc;
+    }
+    // 相手コマが1枚以上あり、自分のコマで挟まれていれば反転
+    if (line.length > 0 && r >= 0 && r < size && c >= 0 && c < size && newBoard[r][c] === player) {
+      for (const cell of line) {
+        newBoard[cell.row][cell.col] = player;
+        flipped.push(cell);
+      }
+    }
+  }
+
+  return { newBoard, replaced: false, valid: true, flipped };
 }
 
 /**
