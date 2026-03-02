@@ -311,6 +311,9 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const textPopsRef = useRef<TextPop[]>([]);
     const popIdRef = useRef(0);
 
+    // CPU自動起動フラグ: 初手・リスタート時にCPUターンなら対象プレイヤーをセット
+    const cpuAutoTriggerRef = useRef<Player | null>(null);
+
     const isDraggingRef = useRef(false);
     const ballDragPosRef = useRef({ x: 0, y: 0 });
     const dragHistoryRef = useRef<{ x: number; y: number; t: number }[]>([]);
@@ -668,6 +671,14 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         const phase = gamePhaseRef.current;
         const bs = boardSizeRef.current;
 
+        // CPU自動起動フラグチェック（アニメーションループ内でレイアウト確定後に実行）
+        if (cpuAutoTriggerRef.current !== null && phase === "idle") {
+          const cpuPlayer = cpuAutoTriggerRef.current;
+          cpuAutoTriggerRef.current = null;
+          gamePhaseRef.current = "cpu_thinking";
+          setTimeout(() => fireCPUThrow(cpuPlayer), CPU_THINK_DELAY);
+        }
+
         // 放物線アーク更新
         if (phase === "flying" && ballAnimRef.current.active) {
           const anim = ballAnimRef.current;
@@ -860,7 +871,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
 
         animFrameRef.current = requestAnimationFrame(animate);
       },
-      [handleImpact]
+      [handleImpact, fireCPUThrow]
     );
 
     // ============================================================
@@ -1170,14 +1181,11 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       lastRenderTime.current = performance.now();
       animFrameRef.current = requestAnimationFrame(animate);
 
-      // 初手がCPUのターンなら自動起動
+      // 初手がCPUのターンならフラグセット（アニメーションループ内で実行）
       if (mode === "cpu" && currentPlayerRef.current !== myColor) {
-        gamePhaseRef.current = "cpu_thinking";
-        syncDisplayState();
-        setTimeout(() => fireCPUThrow(currentPlayerRef.current), CPU_THINK_DELAY);
-      } else {
-        syncDisplayState();
+        cpuAutoTriggerRef.current = currentPlayerRef.current;
       }
+      syncDisplayState();
 
       const ro = new ResizeObserver(() => calcLayout());
       if (containerRef.current) ro.observe(containerRef.current);
@@ -1208,14 +1216,11 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       smokeParticlesRef.current = [];
       textPopsRef.current = [];
 
-      // リスタート後も初手がCPUなら自動起動
+      // リスタート後も初手がCPUならフラグセット
       if (mode === "cpu" && currentPlayerRef.current !== myColor) {
-        gamePhaseRef.current = "cpu_thinking";
-        syncDisplayState();
-        setTimeout(() => fireCPUThrow(currentPlayerRef.current), CPU_THINK_DELAY);
-      } else {
-        syncDisplayState();
+        cpuAutoTriggerRef.current = currentPlayerRef.current;
       }
+      syncDisplayState();
     };
 
     // ============================================================
