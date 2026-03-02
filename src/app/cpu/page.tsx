@@ -9,6 +9,7 @@ export default function CpuPage() {
   const [boardSize, setBoardSize] = useState<BoardSize | null>(null);
   const [sensitivity, setSensitivity] = useState<Sensitivity>(1);
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
+  const [playerCount, setPlayerCount] = useState<2 | 3>(2);
 
   if (!boardSize) {
     return (
@@ -19,6 +20,33 @@ export default function CpuPage() {
         </div>
         <div className="flex-1 flex flex-col items-center justify-center gap-5 px-6 w-full max-w-sm py-8">
 
+          {/* 対戦人数 */}
+          <p className="text-green-300 font-bold text-lg self-start">対戦人数</p>
+          <div className="w-full flex gap-3">
+            <button
+              onClick={() => setPlayerCount(2)}
+              className={`flex-1 py-4 rounded-2xl font-black text-xl shadow-lg active:scale-95 transition-transform ${
+                playerCount === 2
+                  ? "bg-gradient-to-r from-green-600 to-green-800 text-white"
+                  : "bg-green-900 text-green-400"
+              }`}
+            >
+              2人対戦
+              <p className="text-xs font-normal opacity-80 mt-1">⚫ vs ⚪</p>
+            </button>
+            <button
+              onClick={() => setPlayerCount(3)}
+              className={`flex-1 py-4 rounded-2xl font-black text-xl shadow-lg active:scale-95 transition-transform ${
+                playerCount === 3
+                  ? "bg-gradient-to-r from-purple-600 to-purple-900 text-white"
+                  : "bg-green-900 text-green-400"
+              }`}
+            >
+              3人対戦
+              <p className="text-xs font-normal opacity-80 mt-1">⚫ vs ⚪ vs 🔴</p>
+            </button>
+          </div>
+
           {/* 盤面サイズ */}
           <p className="text-green-300 font-bold text-lg self-start">盤面サイズ</p>
           <div className="w-full flex gap-3">
@@ -27,14 +55,14 @@ export default function CpuPage() {
               className="flex-1 py-5 rounded-2xl bg-gradient-to-r from-green-600 to-green-800 text-white text-2xl font-black shadow-lg active:scale-95 transition-transform"
             >
               6 × 6
-              <p className="text-xs font-normal opacity-80 mt-1">34手で終了</p>
+              <p className="text-xs font-normal opacity-80 mt-1">{playerCount === 3 ? "30手で終了" : "34手で終了"}</p>
             </button>
             <button
               onClick={() => setBoardSize(8)}
               className="flex-1 py-5 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-800 text-white text-2xl font-black shadow-lg active:scale-95 transition-transform"
             >
               8 × 8
-              <p className="text-xs font-normal opacity-80 mt-1">62手で終了</p>
+              <p className="text-xs font-normal opacity-80 mt-1">{playerCount === 3 ? "58手で終了" : "62手で終了"}</p>
             </button>
           </div>
 
@@ -43,12 +71,12 @@ export default function CpuPage() {
           <div className="w-full flex flex-col gap-2">
             {(
               [
-                { value: "easy",   label: "かんたん",   desc: "" },
-                { value: "normal", label: "ふつう",     desc: "" },
-                { value: "hard",   label: "つよい",     desc: "" },
-                { value: "oni",    label: "おにつよい", desc: "👹" },
-              ] as { value: Difficulty; label: string; desc: string }[]
-            ).map(({ value, label, desc }) => (
+                { value: "easy",   label: "かんたん" },
+                { value: "normal", label: "ふつう" },
+                { value: "hard",   label: "つよい" },
+                { value: "oni",    label: "おにつよい", icon: "👹" },
+              ] as { value: Difficulty; label: string; icon?: string }[]
+            ).map(({ value, label, icon }) => (
               <button
                 key={value}
                 onClick={() => setDifficulty(value)}
@@ -59,7 +87,7 @@ export default function CpuPage() {
                 }`}
               >
                 <span className="text-lg">{label}</span>
-                {desc && <span className="text-sm font-normal opacity-90">{desc}</span>}
+                {icon && <span>{icon}</span>}
                 {difficulty === value && (
                   <span className="ml-auto text-xs bg-black/20 px-2 py-0.5 rounded-full">選択中</span>
                 )}
@@ -98,15 +126,26 @@ export default function CpuPage() {
     );
   }
 
+  const modeLabel = playerCount === 3
+    ? "あなた（黒） vs CPU（白） vs CPU（赤）"
+    : "あなた（黒） vs CPU（白）";
+
   return (
     <div className="min-h-screen flex flex-col items-center bg-green-950">
       <div className="w-full flex items-center px-4 py-3 bg-green-900 shadow-md">
         <button onClick={() => setBoardSize(null)} className="text-green-300 mr-3 text-lg">←</button>
         <h1 className="text-white font-bold text-lg">🤖 CPU対戦</h1>
-        <p className="text-green-400 text-xs ml-3">{boardSize}×{boardSize} ／ あなた（黒） vs CPU（白）</p>
+        <p className="text-green-400 text-xs ml-3">{boardSize}×{boardSize} ／ {modeLabel}</p>
       </div>
       <div className="w-full flex justify-center px-2 pt-2">
-        <GameCanvas mode="cpu" myColor="black" boardSize={boardSize} sensitivity={sensitivity} difficulty={difficulty} />
+        <GameCanvas
+          mode="cpu"
+          myColor="black"
+          boardSize={boardSize}
+          sensitivity={sensitivity}
+          difficulty={difficulty}
+          playerCount={playerCount}
+        />
       </div>
     </div>
   );

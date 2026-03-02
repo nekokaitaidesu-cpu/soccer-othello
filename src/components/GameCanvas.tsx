@@ -37,6 +37,7 @@ export interface GameCanvasProps {
   boardSize?: BoardSize;
   sensitivity?: Sensitivity;
   difficulty?: Difficulty;
+  playerCount?: 2 | 3;
   onMove?: (row: number, col: number) => void;
 }
 
@@ -45,6 +46,14 @@ const SENSITIVITY_SCALE: Record<Sensitivity, number> = {
   2: 5.5, // 普通に投げる
   3: 7,   // 簡単に遠くへ飛ぶ
 };
+
+// ターン順（3人対応）
+function getNextPlayer(current: Player, playerCount: number): Player {
+  if (playerCount === 2) return current === "black" ? "white" : "black";
+  if (current === "black") return "white";
+  if (current === "white") return "red";
+  return "black";
+}
 
 interface FlyingPiece {
   id: number;
@@ -70,7 +79,7 @@ interface BallAnim {
   targetRow: number;
   targetCol: number;
   player: Player;
-  isOffBoard?: boolean; // 盤外に飛び出す場合
+  isOffBoard?: boolean;
 }
 
 /** 煙パーティクル */
@@ -83,7 +92,7 @@ interface SmokeParticle {
   duration: number;
 }
 
-/** テキストポップ（ボスン等） */
+/** テキストポップ */
 interface TextPop {
   id: number;
   x: number; y: number;
@@ -162,6 +171,13 @@ function drawRoundRect(
   ctx.roundRect(x, y, w, h, r);
 }
 
+function pieceColors(player: Player): { light: string; dark: string; stroke: string } {
+  if (player === "black") return { light: "#666", dark: "#111", stroke: "#333" };
+  if (player === "white") return { light: "#ffffff", dark: "#cccccc", stroke: "#999" };
+  // red
+  return { light: "#ff8888", dark: "#cc0000", stroke: "#880000" };
+}
+
 function drawPiece(
   ctx: CanvasRenderingContext2D,
   x: number, y: number,
@@ -183,20 +199,16 @@ function drawPiece(
     -radius * 0.3, -radius * 0.35, radius * 0.05,
     0, 0, radius
   );
-  if (player === "black") {
-    grad.addColorStop(0, "#666");
-    grad.addColorStop(1, "#111");
-  } else {
-    grad.addColorStop(0, "#ffffff");
-    grad.addColorStop(1, "#cccccc");
-  }
+  const pc = pieceColors(player);
+  grad.addColorStop(0, pc.light);
+  grad.addColorStop(1, pc.dark);
   ctx.fillStyle = grad;
   ctx.beginPath();
   ctx.arc(0, 0, radius, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.shadowColor = "transparent";
-  ctx.strokeStyle = player === "black" ? "#333" : "#999";
+  ctx.strokeStyle = pc.stroke;
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
@@ -269,14 +281,16 @@ function lerp(a: number, b: number, t: number) {
 // GameCanvas コンポーネント
 // ============================================================
 const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
-  function GameCanvas({ mode, myColor = "black", boardSize = 6, sensitivity = 1, difficulty = "normal", onMove }, ref) {
+  function GameCanvas({ mode, myColor = "black", boardSize = 6, sensitivity = 1, difficulty = "normal", playerCount = 2, onMove }, ref) {
     const velocityScale = SENSITIVITY_SCALE[sensitivity];
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
     const boardSizeRef = useRef<BoardSize>(boardSize);
-    const boardRef = useRef<Board>(createInitialBoard(boardSize));
+    const playerCountRef = useRef<2 | 3>(playerCount);
+    const boardRef = useRef<Board>(createInitialBoard(boardSize, playerCount));
     const currentPlayerRef = useRef<Player>("black");
+
     const gamePhaseRef = useRef<GamePhase>("idle");
     const flyingPiecesRef = useRef<FlyingPiece[]>([]);
     const ballAnimRef = useRef<BallAnim>({
@@ -311,15 +325,18 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ballRadius: 25,
     });
 
+    const initCounts = countPieces(createInitialBoard(boardSize, playerCount));
     const [displayState, setDisplayState] = useState({
-      board: createInitialBoard(boardSize) as Board,
+      board: createInitialBoard(boardSize, playerCount) as Board,
       currentPlayer: "black" as Player,
       phase: "idle" as GamePhase,
-      blackCount: 2, whiteCount: 2,
+      blackCount: initCounts.black,
+      whiteCount: initCounts.white,
+      redCount: initCounts.red,
       winner: null as Player | "draw" | null,
       message: "",
       moveCount: 0,
-      turnLimit: getTurnLimit(boardSize),
+      turnLimit: getTurnLimit(boardSize, playerCount),
     });
 
     const lastRenderTime = useRef(0);
@@ -364,31 +381,36 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     // displayState 同期
     // ============================================================
     function syncDisplayState(msg?: string) {
-      const { black, white } = countPieces(boardRef.current);
+      const { black, white, red } = countPieces(boardRef.current);
       const winner = winnerRef.current ?? getWinner(boardRef.current);
       const phase = gamePhaseRef.current;
       const cp = currentPlayerRef.current;
       const mc = moveCountRef.current;
-      const tl = getTurnLimit(boardSizeRef.current);
+      const pc = playerCountRef.current;
+      const tl = getTurnLimit(boardSizeRef.current, pc);
 
       let message = msg ?? "";
       if (!msg) {
         if (phase === "gameover") {
           message = winner === "draw" ? "引き分け！"
-            : winner === "black" ? "黒の勝ち！" : "白の勝ち！";
+            : winner === "black" ? "黒の勝ち！"
+            : winner === "white" ? "白の勝ち！"
+            : "赤の勝ち！";
         } else if (phase === "cpu_thinking") {
           message = "CPUが考え中...";
         } else if (mode === "online") {
           message = cp === myColor ? "あなたのターン" : "相手のターン待ち";
         } else {
-          message = cp === "black" ? "⚫ 黒のターン" : "⚪ 白のターン";
+          message = cp === "black" ? "⚫ 黒のターン"
+            : cp === "white" ? "⚪ 白のターン"
+            : "🔴 赤のターン";
         }
       }
 
       setDisplayState({
         board: boardRef.current.map((r) => [...r]) as Board,
         currentPlayer: cp, phase,
-        blackCount: black, whiteCount: white, winner, message,
+        blackCount: black, whiteCount: white, redCount: red, winner, message,
         moveCount: mc, turnLimit: tl,
       });
     }
@@ -434,24 +456,20 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           const startY = L.boardY + row * L.cellSize + L.cellSize / 2;
 
           if (nextRow < 0 || nextRow >= bs || nextCol < 0 || nextCol >= bs) {
-            // 盤外に飛び出す → 盤面の端（キャンバス内）に向かって飛んで煙で消える
-            // 左右はX方向の端に、上下はY方向の端にクランプして必ず画面内に収める
             let edgeX: number;
             let edgeY: number;
             let edgeArcH: number;
             if (dc !== 0) {
-              // 左右方向: 盤面の左端または右端に向かって水平に飛ぶ
               edgeX = dc < 0
-                ? L.boardX + L.ballRadius              // 左端
-                : L.boardX + L.boardW - L.ballRadius;  // 右端
+                ? L.boardX + L.ballRadius
+                : L.boardX + L.boardW - L.ballRadius;
               edgeY = startY;
-              edgeArcH = 0; // 水平移動なのでアーク不要
+              edgeArcH = 0;
             } else {
-              // 上下方向: 盤面の上端または下端に向かって飛ぶ
               edgeX = startX;
               edgeY = dr < 0
-                ? L.boardY + L.ballRadius              // 上端
-                : L.boardY + L.boardH - L.ballRadius;  // 下端
+                ? L.boardY + L.ballRadius
+                : L.boardY + L.boardH - L.ballRadius;
               edgeArcH = L.cellSize * 0.3;
             }
             ballAnimRef.current = {
@@ -463,7 +481,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
             };
             gamePhaseRef.current = "flying";
           } else {
-            // 次のマスへ弾む
             const targetX = L.boardX + nextCol * L.cellSize + L.cellSize / 2;
             const targetY = L.boardY + nextRow * L.cellSize + L.cellSize / 2;
             const dist = Math.hypot(targetX - startX, targetY - startY);
@@ -485,7 +502,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           const L = layoutRef.current;
           const px = L.boardX + col * L.cellSize + L.cellSize / 2;
           const py = L.boardY + row * L.cellSize + L.cellSize / 2;
-          const opponent: Player = player === "black" ? "white" : "black";
+          // 元の盤面から叩かれたコマの色を取得（boardRef はまだ更新前）
+          const replacedColor = boardRef.current[row][col] as Player;
           const angle = Math.random() * Math.PI * 2;
           const speed = 8 + Math.random() * 6;
           flyingPiecesRef.current.push({
@@ -495,11 +513,11 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
             vy: Math.sin(angle) * speed - 4,
             opacity: 1,
             radius: layoutRef.current.cellSize * 0.38,
-            color: opponent,
+            color: replacedColor,
           });
         }
 
-        // online: 最終着弾マスが確定したここで送信（リダイレクト後も含め正しい座標）
+        // online: 最終着弾マスが確定したここで送信
         if (mode === "online" && player === myColor) {
           onMoveRef.current?.(row, col);
         }
@@ -508,7 +526,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         moveCountRef.current += 1;
         impactCellRef.current = { row, col };
 
-        // ひっくり返ったコマにフリップアニメーション登録
         if (result.flipped.length > 0) {
           const now = Date.now();
           flippedCellsRef.current = result.flipped.map((cell) => ({
@@ -519,8 +536,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         impactTimerRef.current = Date.now();
         ballAnimRef.current.active = false;
 
-        // 勝敗判定（盤面が埋まった or 手数上限）
-        const turnLimit = getTurnLimit(boardSizeRef.current);
+        const pc = playerCountRef.current;
+        const turnLimit = getTurnLimit(boardSizeRef.current, pc);
         const boardFull = getWinner(boardRef.current);
         const turnLimitReached = moveCountRef.current >= turnLimit;
 
@@ -534,7 +551,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         }
 
         setTimeout(() => {
-          const next: Player = player === "black" ? "white" : "black";
+          const next = getNextPlayer(player, playerCountRef.current);
           currentPlayerRef.current = next;
           gamePhaseRef.current = "idle";
           impactCellRef.current = null;
@@ -550,11 +567,9 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
                 let nCol = cpuMove.col;
 
                 if (difficulty === "easy") {
-                  // 完全ランダム: 盤面上の任意のマスを選ぶ
                   nRow = Math.floor(Math.random() * bs);
                   nCol = Math.floor(Math.random() * bs);
                 } else if (difficulty === "normal") {
-                  // 40%完璧、40%±1マス、20%±2マス
                   const r = Math.random();
                   if (r > 0.4) {
                     const amt = r > 0.8 ? 2 : 1;
@@ -562,7 +577,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
                     nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
                   }
                 } else if (difficulty === "hard") {
-                  // 80%完璧、15%±1マス、5%±2マス
                   const r = Math.random();
                   if (r > 0.8) {
                     const amt = r > 0.95 ? 2 : 1;
@@ -570,7 +584,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
                     nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
                   }
                 }
-                // "oni": ブレなし（nRow/nColそのまま）
 
                 throwBall(nRow, nCol, next);
               }
@@ -589,7 +602,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     useImperativeHandle(ref, () => ({
       applyExternalMove(row: number, col: number) {
         if (gamePhaseRef.current !== "idle") return;
-        // -1,-1 は盤外消滅シグナル: コマ未配置でターンを自分に切り替える
         if (row === -1 && col === -1) {
           currentPlayerRef.current = myColor;
           gamePhaseRef.current = "idle";
@@ -658,17 +670,14 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           ballRotationRef.current += 0.13;
           if (anim.progress >= 1) {
             if (anim.isOffBoard) {
-              // 盤外 → 煙エフェクト＋ターン消費
               const ex = anim.targetX;
               const ey = anim.targetY;
               const pid = popIdRef.current++;
-              // 進行方向に応じて煙の拡散方向を変える
               const offAnim = ballAnimRef.current;
               const spreadDx = offAnim.targetX - offAnim.startX;
               const spreadDy = offAnim.targetY - offAnim.startY;
               const isHoriz = Math.abs(spreadDx) > Math.abs(spreadDy);
               for (let i = 0; i < 10; i++) {
-                // 左右方向なら縦方向に広がる煙、上下なら横方向に広がる煙
                 const perpX = isHoriz ? (Math.random() - 0.5) * 40 : (Math.random() - 0.5) * 16;
                 const perpY = isHoriz ? (Math.random() - 0.5) * 16 : (Math.random() - 0.5) * 40;
                 smokeParticlesRef.current.push({
@@ -689,11 +698,9 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
                 duration: 900,
               });
               ballAnimRef.current.active = false;
-              // ターン交代（コマ未配置）
-              const next: Player = anim.player === "black" ? "white" : "black";
+              const next = getNextPlayer(anim.player, playerCountRef.current);
               currentPlayerRef.current = next;
               gamePhaseRef.current = "idle";
-              // online: 盤外消滅を相手に通知（-1,-1 = ターンスキップシグナル）
               if (mode === "online" && anim.player === myColor) {
                 onMoveRef.current?.(-1, -1);
               }
@@ -701,31 +708,30 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
                 gamePhaseRef.current = "cpu_thinking";
                 syncDisplayState();
                 setTimeout(() => {
-                  const bs = boardSizeRef.current;
+                  const bsInner = boardSizeRef.current;
                   const cpuMove = getCPUMove(boardRef.current, next);
                   if (cpuMove) {
                     let nRow = cpuMove.row;
                     let nCol = cpuMove.col;
 
                     if (difficulty === "easy") {
-                      nRow = Math.floor(Math.random() * bs);
-                      nCol = Math.floor(Math.random() * bs);
+                      nRow = Math.floor(Math.random() * bsInner);
+                      nCol = Math.floor(Math.random() * bsInner);
                     } else if (difficulty === "normal") {
                       const r = Math.random();
                       if (r > 0.4) {
                         const amt = r > 0.8 ? 2 : 1;
-                        nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
-                        nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
+                        nRow = Math.max(0, Math.min(bsInner - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
+                        nCol = Math.max(0, Math.min(bsInner - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
                       }
                     } else if (difficulty === "hard") {
                       const r = Math.random();
                       if (r > 0.8) {
                         const amt = r > 0.95 ? 2 : 1;
-                        nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
-                        nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
+                        nRow = Math.max(0, Math.min(bsInner - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
+                        nCol = Math.max(0, Math.min(bsInner - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
                       }
                     }
-                    // "oni": no noise
 
                     throwBall(nRow, nCol, next);
                   }
@@ -765,7 +771,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         // コマ描画
         const FLIP_DURATION = 400;
         const now = Date.now();
-        // 期限切れのフリップアニメを削除
         flippedCellsRef.current = flippedCellsRef.current.filter(
           (f) => now - f.startTime < FLIP_DURATION
         );
@@ -777,7 +782,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
             const cx = L.boardX + c * L.cellSize + L.cellSize / 2;
             const cy = L.boardY + r * L.cellSize + L.cellSize / 2;
 
-            // 着弾バウンス
             let impactScale = 1;
             const ic = impactCellRef.current;
             if (ic && ic.row === r && ic.col === c && phase === "impact") {
@@ -785,31 +789,27 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
               impactScale = 1 + 0.35 * Math.sin((elapsed / IMPACT_DURATION) * Math.PI);
             }
 
-            // ひっくり返りスケールアニメ
             const flipInfo = flippedCellsRef.current.find((f) => f.row === r && f.col === c);
             if (flipInfo) {
               const t = (now - flipInfo.startTime) / FLIP_DURATION;
-              // 0→1: X方向に縮む→広がる（フリップ感）
               const scaleX = Math.abs(Math.cos(t * Math.PI));
               ctx.save();
               ctx.translate(cx, cy);
               ctx.scale(scaleX * impactScale, impactScale);
+              const pc = pieceColors(cell);
               const grad = ctx.createRadialGradient(
                 -L.cellSize * 0.38 * 0.3, -L.cellSize * 0.38 * 0.35, L.cellSize * 0.38 * 0.05,
                 0, 0, L.cellSize * 0.38
               );
-              if (cell === "black") {
-                grad.addColorStop(0, "#666"); grad.addColorStop(1, "#111");
-              } else {
-                grad.addColorStop(0, "#ffffff"); grad.addColorStop(1, "#cccccc");
-              }
+              grad.addColorStop(0, pc.light);
+              grad.addColorStop(1, pc.dark);
               ctx.shadowColor = "rgba(0,0,0,0.5)"; ctx.shadowBlur = 6; ctx.shadowOffsetY = 3;
               ctx.fillStyle = grad;
               ctx.beginPath();
               ctx.arc(0, 0, L.cellSize * 0.38, 0, Math.PI * 2);
               ctx.fill();
               ctx.shadowColor = "transparent";
-              ctx.strokeStyle = cell === "black" ? "#333" : "#999";
+              ctx.strokeStyle = pc.stroke;
               ctx.lineWidth = 1.5;
               ctx.stroke();
               ctx.restore();
@@ -831,12 +831,12 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         );
         for (const p of smokeParticlesRef.current) {
           const t = (nowSmoke - p.startTime) / p.duration;
-          const r = p.maxRadius * Math.sqrt(t);
+          const rr = p.maxRadius * Math.sqrt(t);
           ctx.save();
           ctx.globalAlpha = 0.7 * (1 - t);
           ctx.fillStyle = "#aaaaaa";
           ctx.beginPath();
-          ctx.arc(p.x + p.offsetX * t, p.y + p.offsetY * t, r, 0, Math.PI * 2);
+          ctx.arc(p.x + p.offsetX * t, p.y + p.offsetY * t, rr, 0, Math.PI * 2);
           ctx.fill();
           ctx.restore();
         }
@@ -893,45 +893,75 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ctx.fillStyle = "#0d3d0d";
       ctx.fillRect(0, 0, L.canvasW, HEADER_H);
 
-      const { black, white } = countPieces(boardRef.current);
+      const { black, white, red } = countPieces(boardRef.current);
       const cp = currentPlayerRef.current;
       const mc = moveCountRef.current;
-      const tl = getTurnLimit(bs);
+      const pc = playerCountRef.current;
+      const tl = getTurnLimit(bs, pc);
       ctx.save();
 
-      // 黒エリア（左）
-      const blackActive = cp === "black";
-      ctx.fillStyle = blackActive ? "rgba(0,0,0,0.8)" : "rgba(0,0,0,0.4)";
-      drawRoundRect(ctx, 8, 8, L.canvasW / 2 - 16, HEADER_H - 16, 8);
-      ctx.fill();
-      if (blackActive) {
-        ctx.strokeStyle = "#4ade80"; ctx.lineWidth = 2;
+      if (pc === 3) {
+        // 3人: 3等分表示
+        const slotW = L.canvasW / 3;
+        const players: { p: Player; label: string; count: number }[] = [
+          { p: "black", label: "黒", count: black },
+          { p: "white", label: "白", count: white },
+          { p: "red",   label: "赤", count: red },
+        ];
+        players.forEach(({ p, label, count }, i) => {
+          const active = cp === p;
+          const x = i * slotW + 4;
+          const w = slotW - 8;
+          if (p === "black") ctx.fillStyle = active ? "rgba(0,0,0,0.8)" : "rgba(0,0,0,0.4)";
+          else if (p === "white") ctx.fillStyle = active ? "rgba(60,60,60,0.8)" : "rgba(40,40,40,0.4)";
+          else ctx.fillStyle = active ? "rgba(180,0,0,0.7)" : "rgba(100,0,0,0.3)";
+          drawRoundRect(ctx, x, 6, w, HEADER_H - 12, 7);
+          ctx.fill();
+          if (active) {
+            ctx.strokeStyle = "#4ade80"; ctx.lineWidth = 2;
+            drawRoundRect(ctx, x, 6, w, HEADER_H - 12, 7);
+            ctx.stroke();
+          }
+          drawPiece(ctx, x + 16, HEADER_H / 2, 9, p);
+          ctx.fillStyle = active ? "#ffffff" : "#aaaaaa";
+          ctx.font = `bold ${Math.floor(HEADER_H * 0.4)}px sans-serif`;
+          ctx.textAlign = "left"; ctx.textBaseline = "middle";
+          ctx.fillText(`${label} ${count}`, x + 30, HEADER_H / 2);
+        });
+      } else {
+        // 2人: 左右半分
+        const blackActive = cp === "black";
+        ctx.fillStyle = blackActive ? "rgba(0,0,0,0.8)" : "rgba(0,0,0,0.4)";
         drawRoundRect(ctx, 8, 8, L.canvasW / 2 - 16, HEADER_H - 16, 8);
-        ctx.stroke();
-      }
-      drawPiece(ctx, 28, HEADER_H / 2, 10, "black");
-      ctx.fillStyle = blackActive ? "#ffffff" : "#aaaaaa";
-      ctx.font = `bold ${Math.floor(HEADER_H * 0.45)}px sans-serif`;
-      ctx.textAlign = "left"; ctx.textBaseline = "middle";
-      ctx.fillText(`黒 ${black}`, 44, HEADER_H / 2);
+        ctx.fill();
+        if (blackActive) {
+          ctx.strokeStyle = "#4ade80"; ctx.lineWidth = 2;
+          drawRoundRect(ctx, 8, 8, L.canvasW / 2 - 16, HEADER_H - 16, 8);
+          ctx.stroke();
+        }
+        drawPiece(ctx, 28, HEADER_H / 2, 10, "black");
+        ctx.fillStyle = blackActive ? "#ffffff" : "#aaaaaa";
+        ctx.font = `bold ${Math.floor(HEADER_H * 0.45)}px sans-serif`;
+        ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        ctx.fillText(`黒 ${black}`, 44, HEADER_H / 2);
 
-      // 白エリア（右）
-      const whiteActive = cp === "white";
-      ctx.fillStyle = whiteActive ? "rgba(60,60,60,0.8)" : "rgba(40,40,40,0.4)";
-      drawRoundRect(ctx, L.canvasW / 2 + 8, 8, L.canvasW / 2 - 16, HEADER_H - 16, 8);
-      ctx.fill();
-      if (whiteActive) {
-        ctx.strokeStyle = "#4ade80"; ctx.lineWidth = 2;
+        const whiteActive = cp === "white";
+        ctx.fillStyle = whiteActive ? "rgba(60,60,60,0.8)" : "rgba(40,40,40,0.4)";
         drawRoundRect(ctx, L.canvasW / 2 + 8, 8, L.canvasW / 2 - 16, HEADER_H - 16, 8);
-        ctx.stroke();
+        ctx.fill();
+        if (whiteActive) {
+          ctx.strokeStyle = "#4ade80"; ctx.lineWidth = 2;
+          drawRoundRect(ctx, L.canvasW / 2 + 8, 8, L.canvasW / 2 - 16, HEADER_H - 16, 8);
+          ctx.stroke();
+        }
+        drawPiece(ctx, L.canvasW / 2 + 28, HEADER_H / 2, 10, "white");
+        ctx.fillStyle = whiteActive ? "#ffffff" : "#aaaaaa";
+        ctx.font = `bold ${Math.floor(HEADER_H * 0.45)}px sans-serif`;
+        ctx.textAlign = "left";
+        ctx.fillText(`白 ${white}`, L.canvasW / 2 + 44, HEADER_H / 2);
       }
-      drawPiece(ctx, L.canvasW / 2 + 28, HEADER_H / 2, 10, "white");
-      ctx.fillStyle = whiteActive ? "#ffffff" : "#aaaaaa";
-      ctx.font = `bold ${Math.floor(HEADER_H * 0.45)}px sans-serif`;
-      ctx.textAlign = "left";
-      ctx.fillText(`白 ${white}`, L.canvasW / 2 + 44, HEADER_H / 2);
 
-      // 手数・感度表示（中央上部にうっすら）
+      // 手数・感度表示
       ctx.font = `${Math.floor(HEADER_H * 0.28)}px sans-serif`;
       ctx.fillStyle = "rgba(255,255,255,0.5)";
       ctx.textAlign = "center";
@@ -963,7 +993,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         ctx.lineTo(L.boardX + L.boardW, L.boardY + i * L.cellSize);
         ctx.stroke();
       }
-      // スターポイント
       const dots = bs === 8
         ? [[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]]
         : [[1, 1], [1, 4], [4, 1], [4, 4]];
@@ -1011,6 +1040,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       bs: BoardSize
     ) {
       const cp = currentPlayerRef.current;
+      const pc = playerCountRef.current;
       const isInteractable =
         phase === "idle" &&
         (mode === "solo" ||
@@ -1022,21 +1052,25 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ctx.textBaseline = "bottom";
 
       if (phase === "gameover") {
-        const { black, white } = countPieces(boardRef.current);
+        const { black, white, red } = countPieces(boardRef.current);
         const winner = winnerRef.current ?? determineWinner(boardRef.current);
         const msg = winner === "draw" ? "引き分け！"
-          : winner === "black" ? "⚫ 黒の勝ち！" : "⚪ 白の勝ち！";
+          : winner === "black" ? "⚫ 黒の勝ち！"
+          : winner === "white" ? "⚪ 白の勝ち！"
+          : "🔴 赤の勝ち！";
         ctx.font = `bold ${L.cellSize * 0.55}px sans-serif`;
         ctx.fillStyle = "#FFD700";
         ctx.shadowColor = "rgba(0,0,0,0.8)"; ctx.shadowBlur = 8;
         ctx.fillText(msg, L.canvasW / 2, L.ballAreaY + L.ballAreaH - 8);
-        ctx.font = `${L.cellSize * 0.4}px sans-serif`;
+        ctx.font = `${L.cellSize * 0.38}px sans-serif`;
         ctx.fillStyle = "white";
         ctx.shadowBlur = 0;
-        ctx.fillText(`黒 ${black} ― 白 ${white}`, L.canvasW / 2, L.ballAreaY + L.ballAreaH - 8 - L.cellSize * 0.6);
-        // 手数表示
+        const scoreText = pc === 3
+          ? `黒 ${black} ― 白 ${white} ― 赤 ${red}`
+          : `黒 ${black} ― 白 ${white}`;
+        ctx.fillText(scoreText, L.canvasW / 2, L.ballAreaY + L.ballAreaH - 8 - L.cellSize * 0.6);
         const mc = moveCountRef.current;
-        const tl = getTurnLimit(bs);
+        const tl = getTurnLimit(bs, pc);
         ctx.font = `${L.cellSize * 0.32}px sans-serif`;
         ctx.fillStyle = "rgba(255,255,255,0.6)";
         ctx.fillText(`${mc}手終了（上限 ${tl}手）`, L.canvasW / 2, L.ballAreaY + L.ballAreaH - 8 - L.cellSize * 1.15);
@@ -1118,10 +1152,9 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         }
 
         const L = layoutRef.current;
-        const bs = boardSizeRef.current;
-        const target = computeTargetFromVelocity(dragPos.x, vx, vy, bs, L);
+        const bsLocal = boardSizeRef.current;
+        const target = computeTargetFromVelocity(dragPos.x, vx, vy, bsLocal, L);
         const cp = currentPlayerRef.current;
-        // ※ online の送信は handleImpact で最終着弾マスが確定してから行う
 
         const targetX = L.boardX + target.col * L.cellSize + L.cellSize / 2;
         const targetY = L.boardY + target.row * L.cellSize + L.cellSize / 2;
@@ -1175,7 +1208,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     // ============================================================
     const restart = () => {
       const bs = boardSizeRef.current;
-      boardRef.current = createInitialBoard(bs);
+      const pc = playerCountRef.current;
+      boardRef.current = createInitialBoard(bs, pc);
       currentPlayerRef.current = "black";
       gamePhaseRef.current = "idle";
       flyingPiecesRef.current = [];

@@ -1,6 +1,6 @@
 export const BOARD_SIZE = 8;
 export type BoardSize = 6 | 8;
-export type Player = "black" | "white";
+export type Player = "black" | "white" | "red";
 export type Cell = Player | null;
 export type Board = Cell[][];
 
@@ -8,35 +8,54 @@ export interface MoveResult {
   newBoard: Board;
   replaced: boolean;
   valid: boolean;
-  flipped: { row: number; col: number }[]; // 現在は常に空（ひっくり返しなし）
+  flipped: { row: number; col: number }[];
 }
 
-export function createInitialBoard(size: BoardSize = 8): Board {
+export function createInitialBoard(size: BoardSize = 8, playerCount: 2 | 3 = 2): Board {
   const board: Board = Array(size)
     .fill(null)
     .map(() => Array(size).fill(null));
   const h = size / 2 - 1;
-  board[h][h] = "white";
-  board[h][h + 1] = "black";
-  board[h + 1][h] = "black";
-  board[h + 1][h + 1] = "white";
+
+  if (playerCount === 3) {
+    // 3人: 各色2コマ、2×3の交互配置
+    // (h, colStart)=B  (h, colStart+1)=W  (h, colStart+2)=R
+    // (h+1, colStart)=R  (h+1, colStart+1)=B  (h+1, colStart+2)=W
+    const colStart = size / 2 - 2;
+    board[h][colStart]     = "black";
+    board[h][colStart + 1] = "white";
+    board[h][colStart + 2] = "red";
+    board[h + 1][colStart]     = "red";
+    board[h + 1][colStart + 1] = "black";
+    board[h + 1][colStart + 2] = "white";
+  } else {
+    // 2人: 通常オセロ配置
+    board[h][h]         = "white";
+    board[h][h + 1]     = "black";
+    board[h + 1][h]     = "black";
+    board[h + 1][h + 1] = "white";
+  }
   return board;
 }
 
-export function getTurnLimit(size: BoardSize): number {
+export function getTurnLimit(size: BoardSize, playerCount: 2 | 3 = 2): number {
+  if (playerCount === 3) return size === 6 ? 30 : 58;
   return size === 6 ? 34 : 62;
 }
 
 export function determineWinner(board: Board): Player | "draw" {
-  const { black, white } = countPieces(board);
-  if (black > white) return "black";
-  if (white > black) return "white";
-  return "draw";
+  const { black, white, red } = countPieces(board);
+  const max = Math.max(black, white, red);
+  const tied = [black === max, white === max, red === max].filter(Boolean).length;
+  if (tied > 1) return "draw";
+  if (black === max) return "black";
+  if (white === max) return "white";
+  return "red";
 }
 
 /**
  * コマを置く。
- * - 空マス → 自分のコマを配置 ＋ 挟んだ相手コマをひっくり返す（標準オセロルール）
+ * - 空マス → 自分のコマを配置 ＋ 挟んだ相手コマをひっくり返す（自色同士で挟めばどの色でも反転）
  * - 相手のコマ → 1-1直接交換のみ（ひっくり返しなし）
  * - 自分のコマ → invalid（呼び出し元でリダイレクト処理）
  */
@@ -64,7 +83,7 @@ export function applyMove(
   }
 
   // 空マスへの着弾 → 8方向を確認してオセロのひっくり返し処理
-  const opponent: Player = player === "black" ? "white" : "black";
+  // 自色同士で挟まれたコマはすべて（何色でも）ひっくり返す
   const directions = [
     [-1, -1], [-1, 0], [-1, 1],
     [0, -1],           [0, 1],
@@ -76,12 +95,13 @@ export function applyMove(
     const line: { row: number; col: number }[] = [];
     let r = row + dr;
     let c = col + dc;
-    while (r >= 0 && r < size && c >= 0 && c < size && newBoard[r][c] === opponent) {
+    // 自分以外のコマが続く間進む（どの色でも対象）
+    while (r >= 0 && r < size && c >= 0 && c < size && newBoard[r][c] !== null && newBoard[r][c] !== player) {
       line.push({ row: r, col: c });
       r += dr;
       c += dc;
     }
-    // 相手コマが1枚以上あり、自分のコマで挟まれていれば反転
+    // 自分のコマで挟まれていれば反転
     if (line.length > 0 && r >= 0 && r < size && c >= 0 && c < size && newBoard[r][c] === player) {
       for (const cell of line) {
         newBoard[cell.row][cell.col] = player;
@@ -95,7 +115,6 @@ export function applyMove(
 
 /**
  * 自分のコマに着弾したとき、最も近い「空きマスまたは相手コマ」を返す。
- * ユークリッド距離が最小のセルを選ぶ。
  */
 export function findNearestValidCell(
   board: Board,
@@ -122,17 +141,19 @@ export function findNearestValidCell(
 export function countPieces(board: Board): {
   black: number;
   white: number;
+  red: number;
   empty: number;
 } {
-  let black = 0, white = 0, empty = 0;
+  let black = 0, white = 0, red = 0, empty = 0;
   for (const row of board) {
     for (const cell of row) {
       if (cell === "black") black++;
       else if (cell === "white") white++;
+      else if (cell === "red") red++;
       else empty++;
     }
   }
-  return { black, white, empty };
+  return { black, white, red, empty };
 }
 
 export function isBoardFull(board: Board): boolean {
@@ -141,26 +162,24 @@ export function isBoardFull(board: Board): boolean {
 
 export function getWinner(board: Board): Player | "draw" | null {
   if (!isBoardFull(board)) return null;
-  const { black, white } = countPieces(board);
-  if (black > white) return "black";
-  if (white > black) return "white";
-  return "draw";
+  return determineWinner(board);
 }
 
 export function getCPUMove(
   board: Board,
   cpuPlayer: Player
 ): { row: number; col: number } | null {
-  const opponent: Player = cpuPlayer === "black" ? "white" : "black";
-
   const opponentCells: { row: number; col: number }[] = [];
   const emptyCells: { row: number; col: number }[] = [];
 
   const size = board.length;
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
-      if (board[r][c] === opponent) opponentCells.push({ row: r, col: c });
-      else if (board[r][c] === null) emptyCells.push({ row: r, col: c });
+      if (board[r][c] !== null && board[r][c] !== cpuPlayer) {
+        opponentCells.push({ row: r, col: c });
+      } else if (board[r][c] === null) {
+        emptyCells.push({ row: r, col: c });
+      }
     }
   }
 
