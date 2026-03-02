@@ -43,10 +43,10 @@ export default function CpuPage() {
           <div className="w-full flex flex-col gap-2">
             {(
               [
-                { value: "easy",   label: "かんたん",   desc: "完全ランダム投げ" },
-                { value: "normal", label: "ふつう",     desc: "40%の確率で狙ってくる" },
-                { value: "hard",   label: "つよい",     desc: "80%の確率で狙ってくる" },
-                { value: "oni",    label: "おにつよい", desc: "必ず狙ってくる 👹" },
+                { value: "easy",   label: "かんたん",   desc: "" },
+                { value: "normal", label: "ふつう",     desc: "" },
+                { value: "hard",   label: "つよい",     desc: "" },
+                { value: "oni",    label: "おにつよい", desc: "👹" },
               ] as { value: Difficulty; label: string; desc: string }[]
             ).map(({ value, label, desc }) => (
               <button
@@ -59,7 +59,7 @@ export default function CpuPage() {
                 }`}
               >
                 <span className="text-lg">{label}</span>
-                <span className="text-sm font-normal opacity-90">{desc}</span>
+                {desc && <span className="text-sm font-normal opacity-90">{desc}</span>}
                 {difficulty === value && (
                   <span className="ml-auto text-xs bg-black/20 px-2 py-0.5 rounded-full">選択中</span>
                 )}
