@@ -29,12 +29,14 @@ export interface GameCanvasHandle {
 }
 
 export type Sensitivity = 1 | 2 | 3;
+export type Difficulty = "easy" | "normal" | "hard" | "oni";
 
 export interface GameCanvasProps {
   mode: "solo" | "cpu" | "online";
   myColor?: Player;
   boardSize?: BoardSize;
   sensitivity?: Sensitivity;
+  difficulty?: Difficulty;
   onMove?: (row: number, col: number) => void;
 }
 
@@ -267,7 +269,7 @@ function lerp(a: number, b: number, t: number) {
 // GameCanvas コンポーネント
 // ============================================================
 const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
-  function GameCanvas({ mode, myColor = "black", boardSize = 6, sensitivity = 1, onMove }, ref) {
+  function GameCanvas({ mode, myColor = "black", boardSize = 6, sensitivity = 1, difficulty = "normal", onMove }, ref) {
     const velocityScale = SENSITIVITY_SCALE[sensitivity];
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -544,15 +546,32 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
               const bs = boardSizeRef.current;
               const cpuMove = getCPUMove(boardRef.current, next);
               if (cpuMove) {
-                const rand = Math.random();
-                let dr = 0, dc = 0;
-                if (rand > 0.4) {
-                  const amount = rand > 0.8 ? 2 : 1;
-                  dr = Math.round((Math.random() - 0.5) * 2 * amount);
-                  dc = Math.round((Math.random() - 0.5) * 2 * amount);
+                let nRow = cpuMove.row;
+                let nCol = cpuMove.col;
+
+                if (difficulty === "easy") {
+                  // 完全ランダム: 盤面上の任意のマスを選ぶ
+                  nRow = Math.floor(Math.random() * bs);
+                  nCol = Math.floor(Math.random() * bs);
+                } else if (difficulty === "normal") {
+                  // 40%完璧、40%±1マス、20%±2マス
+                  const r = Math.random();
+                  if (r > 0.4) {
+                    const amt = r > 0.8 ? 2 : 1;
+                    nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
+                    nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
+                  }
+                } else if (difficulty === "hard") {
+                  // 80%完璧、15%±1マス、5%±2マス
+                  const r = Math.random();
+                  if (r > 0.8) {
+                    const amt = r > 0.95 ? 2 : 1;
+                    nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
+                    nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
+                  }
                 }
-                const nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + dr));
-                const nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + dc));
+                // "oni": ブレなし（nRow/nColそのまま）
+
                 throwBall(nRow, nCol, next);
               }
             }, CPU_THINK_DELAY);
@@ -685,15 +704,29 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
                   const bs = boardSizeRef.current;
                   const cpuMove = getCPUMove(boardRef.current, next);
                   if (cpuMove) {
-                    const rand = Math.random();
-                    let dr2 = 0, dc2 = 0;
-                    if (rand > 0.4) {
-                      const amount = rand > 0.8 ? 2 : 1;
-                      dr2 = Math.round((Math.random() - 0.5) * 2 * amount);
-                      dc2 = Math.round((Math.random() - 0.5) * 2 * amount);
+                    let nRow = cpuMove.row;
+                    let nCol = cpuMove.col;
+
+                    if (difficulty === "easy") {
+                      nRow = Math.floor(Math.random() * bs);
+                      nCol = Math.floor(Math.random() * bs);
+                    } else if (difficulty === "normal") {
+                      const r = Math.random();
+                      if (r > 0.4) {
+                        const amt = r > 0.8 ? 2 : 1;
+                        nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
+                        nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
+                      }
+                    } else if (difficulty === "hard") {
+                      const r = Math.random();
+                      if (r > 0.8) {
+                        const amt = r > 0.95 ? 2 : 1;
+                        nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
+                        nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
+                      }
                     }
-                    const nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + dr2));
-                    const nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + dc2));
+                    // "oni": no noise
+
                     throwBall(nRow, nCol, next);
                   }
                 }, CPU_THINK_DELAY);

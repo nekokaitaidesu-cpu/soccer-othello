@@ -3,11 +3,12 @@ import { useState } from "react";
 import Link from "next/link";
 import GameCanvas from "@/components/GameCanvas";
 import type { BoardSize } from "@/lib/gameLogic";
-import type { Sensitivity } from "@/components/GameCanvas";
+import type { Sensitivity, Difficulty } from "@/components/GameCanvas";
 
 export default function CpuPage() {
   const [boardSize, setBoardSize] = useState<BoardSize | null>(null);
   const [sensitivity, setSensitivity] = useState<Sensitivity>(1);
+  const [difficulty, setDifficulty] = useState<Difficulty>("normal");
 
   if (!boardSize) {
     return (
@@ -35,6 +36,35 @@ export default function CpuPage() {
               8 × 8
               <p className="text-xs font-normal opacity-80 mt-1">62手で終了</p>
             </button>
+          </div>
+
+          {/* 難易度設定 */}
+          <p className="text-green-300 font-bold text-lg self-start mt-2">難易度</p>
+          <div className="w-full flex flex-col gap-2">
+            {(
+              [
+                { value: "easy",   label: "かんたん",   desc: "完全ランダム投げ" },
+                { value: "normal", label: "ふつう",     desc: "40%の確率で狙ってくる" },
+                { value: "hard",   label: "つよい",     desc: "80%の確率で狙ってくる" },
+                { value: "oni",    label: "おにつよい", desc: "必ず狙ってくる 👹" },
+              ] as { value: Difficulty; label: string; desc: string }[]
+            ).map(({ value, label, desc }) => (
+              <button
+                key={value}
+                onClick={() => setDifficulty(value)}
+                className={`w-full py-3 px-4 rounded-xl font-bold text-left transition-all flex items-center gap-3 ${
+                  difficulty === value
+                    ? "bg-red-500 text-white"
+                    : "bg-green-800 text-green-200"
+                }`}
+              >
+                <span className="text-lg">{label}</span>
+                <span className="text-sm font-normal opacity-90">{desc}</span>
+                {difficulty === value && (
+                  <span className="ml-auto text-xs bg-black/20 px-2 py-0.5 rounded-full">選択中</span>
+                )}
+              </button>
+            ))}
           </div>
 
           {/* 感度設定 */}
@@ -76,7 +106,7 @@ export default function CpuPage() {
         <p className="text-green-400 text-xs ml-3">{boardSize}×{boardSize} ／ あなた（黒） vs CPU（白）</p>
       </div>
       <div className="w-full flex justify-center px-2 pt-2">
-        <GameCanvas mode="cpu" myColor="black" boardSize={boardSize} sensitivity={sensitivity} />
+        <GameCanvas mode="cpu" myColor="black" boardSize={boardSize} sensitivity={sensitivity} difficulty={difficulty} />
       </div>
     </div>
   );
