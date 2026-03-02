@@ -438,6 +438,39 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     }, []);
 
     // ============================================================
+    // CPU投球（難易度に応じたノイズ付き）
+    // ============================================================
+    const fireCPUThrow = useCallback((next: Player) => {
+      const bs = boardSizeRef.current;
+      const cpuMove = getCPUMove(boardRef.current, next);
+      if (!cpuMove) return;
+      let nRow = cpuMove.row;
+      let nCol = cpuMove.col;
+
+      if (difficulty === "easy") {
+        nRow = Math.floor(Math.random() * bs);
+        nCol = Math.floor(Math.random() * bs);
+      } else if (difficulty === "normal") {
+        const r = Math.random();
+        if (r > 0.4) {
+          const amt = r > 0.8 ? 2 : 1;
+          nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
+          nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
+        }
+      } else if (difficulty === "hard") {
+        const r = Math.random();
+        if (r > 0.8) {
+          const amt = r > 0.95 ? 2 : 1;
+          nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
+          nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
+        }
+      }
+      // "oni": ノイズなし
+
+      throwBall(nRow, nCol, next);
+    }, [difficulty, throwBall]);
+
+    // ============================================================
     // 着弾処理
     // ============================================================
     const handleImpact = useCallback(
@@ -559,41 +592,13 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           if (mode === "cpu" && next !== myColor) {
             gamePhaseRef.current = "cpu_thinking";
             syncDisplayState();
-            setTimeout(() => {
-              const bs = boardSizeRef.current;
-              const cpuMove = getCPUMove(boardRef.current, next);
-              if (cpuMove) {
-                let nRow = cpuMove.row;
-                let nCol = cpuMove.col;
-
-                if (difficulty === "easy") {
-                  nRow = Math.floor(Math.random() * bs);
-                  nCol = Math.floor(Math.random() * bs);
-                } else if (difficulty === "normal") {
-                  const r = Math.random();
-                  if (r > 0.4) {
-                    const amt = r > 0.8 ? 2 : 1;
-                    nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
-                    nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
-                  }
-                } else if (difficulty === "hard") {
-                  const r = Math.random();
-                  if (r > 0.8) {
-                    const amt = r > 0.95 ? 2 : 1;
-                    nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
-                    nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
-                  }
-                }
-
-                throwBall(nRow, nCol, next);
-              }
-            }, CPU_THINK_DELAY);
+            setTimeout(() => fireCPUThrow(next), CPU_THINK_DELAY);
           } else {
             syncDisplayState();
           }
         }, IMPACT_DURATION);
       },
-      [mode, myColor, throwBall]
+      [mode, myColor, throwBall, fireCPUThrow]
     );
 
     // ============================================================
@@ -707,35 +712,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
               if (mode === "cpu" && next !== myColor) {
                 gamePhaseRef.current = "cpu_thinking";
                 syncDisplayState();
-                setTimeout(() => {
-                  const bsInner = boardSizeRef.current;
-                  const cpuMove = getCPUMove(boardRef.current, next);
-                  if (cpuMove) {
-                    let nRow = cpuMove.row;
-                    let nCol = cpuMove.col;
-
-                    if (difficulty === "easy") {
-                      nRow = Math.floor(Math.random() * bsInner);
-                      nCol = Math.floor(Math.random() * bsInner);
-                    } else if (difficulty === "normal") {
-                      const r = Math.random();
-                      if (r > 0.4) {
-                        const amt = r > 0.8 ? 2 : 1;
-                        nRow = Math.max(0, Math.min(bsInner - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
-                        nCol = Math.max(0, Math.min(bsInner - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
-                      }
-                    } else if (difficulty === "hard") {
-                      const r = Math.random();
-                      if (r > 0.8) {
-                        const amt = r > 0.95 ? 2 : 1;
-                        nRow = Math.max(0, Math.min(bsInner - 1, cpuMove.row + Math.round((Math.random() - 0.5) * 2 * amt)));
-                        nCol = Math.max(0, Math.min(bsInner - 1, cpuMove.col + Math.round((Math.random() - 0.5) * 2 * amt)));
-                      }
-                    }
-
-                    throwBall(nRow, nCol, next);
-                  }
-                }, CPU_THINK_DELAY);
+                setTimeout(() => fireCPUThrow(next), CPU_THINK_DELAY);
               } else {
                 syncDisplayState();
               }
@@ -1192,7 +1169,15 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       calcLayout();
       lastRenderTime.current = performance.now();
       animFrameRef.current = requestAnimationFrame(animate);
-      syncDisplayState();
+
+      // 初手がCPUのターンなら自動起動
+      if (mode === "cpu" && currentPlayerRef.current !== myColor) {
+        gamePhaseRef.current = "cpu_thinking";
+        syncDisplayState();
+        setTimeout(() => fireCPUThrow(currentPlayerRef.current), CPU_THINK_DELAY);
+      } else {
+        syncDisplayState();
+      }
 
       const ro = new ResizeObserver(() => calcLayout());
       if (containerRef.current) ro.observe(containerRef.current);
@@ -1201,7 +1186,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         cancelAnimationFrame(animFrameRef.current);
         ro.disconnect();
       };
-    }, [animate, calcLayout]);
+    }, [animate, calcLayout]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ============================================================
     // リスタート
@@ -1222,7 +1207,15 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       flippedCellsRef.current = [];
       smokeParticlesRef.current = [];
       textPopsRef.current = [];
-      syncDisplayState();
+
+      // リスタート後も初手がCPUなら自動起動
+      if (mode === "cpu" && currentPlayerRef.current !== myColor) {
+        gamePhaseRef.current = "cpu_thinking";
+        syncDisplayState();
+        setTimeout(() => fireCPUThrow(currentPlayerRef.current), CPU_THINK_DELAY);
+      } else {
+        syncDisplayState();
+      }
     };
 
     // ============================================================
