@@ -81,7 +81,7 @@ const MAX_CANVAS_W = 480;
 const IMPACT_DURATION = 350;
 const CPU_THINK_DELAY = 700;
 const GRAVITY = 0.3;
-const VELOCITY_SCALE = 7;
+const VELOCITY_SCALE = 4;
 const ARC_FACTOR = 0.6;
 const ARC_BASE = 60;
 
