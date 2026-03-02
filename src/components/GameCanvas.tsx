@@ -28,12 +28,21 @@ export interface GameCanvasHandle {
   applyExternalMove: (row: number, col: number) => void;
 }
 
+export type Sensitivity = 1 | 2 | 3;
+
 export interface GameCanvasProps {
   mode: "solo" | "cpu" | "online";
   myColor?: Player;
   boardSize?: BoardSize;
+  sensitivity?: Sensitivity;
   onMove?: (row: number, col: number) => void;
 }
+
+const SENSITIVITY_SCALE: Record<Sensitivity, number> = {
+  1: 4,   // 頑張って投げる（おすすめ）
+  2: 5.5, // 普通に投げる
+  3: 7,   // 簡単に遠くへ飛ぶ
+};
 
 interface FlyingPiece {
   id: number;
@@ -258,7 +267,8 @@ function lerp(a: number, b: number, t: number) {
 // GameCanvas コンポーネント
 // ============================================================
 const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
-  function GameCanvas({ mode, myColor = "black", boardSize = 6, onMove }, ref) {
+  function GameCanvas({ mode, myColor = "black", boardSize = 6, sensitivity = 1, onMove }, ref) {
+    const velocityScale = SENSITIVITY_SCALE[sensitivity];
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
@@ -872,11 +882,11 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ctx.textAlign = "left";
       ctx.fillText(`白 ${white}`, L.canvasW / 2 + 44, HEADER_H / 2);
 
-      // 手数表示（中央上部にうっすら）
+      // 手数・感度表示（中央上部にうっすら）
       ctx.font = `${Math.floor(HEADER_H * 0.28)}px sans-serif`;
       ctx.fillStyle = "rgba(255,255,255,0.5)";
       ctx.textAlign = "center";
-      ctx.fillText(`${mc}/${tl}手`, L.canvasW / 2, HEADER_H - 6);
+      ctx.fillText(`${mc}/${tl}手  感度${sensitivity}`, L.canvasW / 2, HEADER_H - 6);
 
       ctx.restore();
     }
@@ -1049,8 +1059,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         const first = recent[0];
         const last = recent[recent.length - 1];
         const dt = Math.max(8, last.t - first.t);
-        const vx = (last.x - first.x) / dt * VELOCITY_SCALE;
-        const vy = (last.y - first.y) / dt * VELOCITY_SCALE;
+        const vx = (last.x - first.x) / dt * velocityScale;
+        const vy = (last.y - first.y) / dt * velocityScale;
 
         if (vy > -0.5) {
           gamePhaseRef.current = "idle";

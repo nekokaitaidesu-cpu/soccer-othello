@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import GameCanvas, { GameCanvasHandle } from "@/components/GameCanvas";
+import type { Sensitivity } from "@/components/GameCanvas";
 import { supabase, isSupabaseConfigured } from "@/lib/supabaseClient";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import type { Player, BoardSize } from "@/lib/gameLogic";
@@ -33,6 +34,7 @@ export default function OnlinePage() {
   const [statusMsg, setStatusMsg] = useState("");
   const [selectedSize, setSelectedSize] = useState<BoardSize>(6);
   const [gameBoardSize, setGameBoardSize] = useState<BoardSize>(6);
+  const [sensitivity, setSensitivity] = useState<Sensitivity>(1);
 
   const channelRef = useRef<RealtimeChannel | null>(null);
   const isHostRef = useRef(false);
@@ -167,6 +169,7 @@ export default function OnlinePage() {
     setStatusMsg("");
     setSelectedSize(6);
     setGameBoardSize(6);
+    setSensitivity(1);
   };
 
   // ============================================================
@@ -249,6 +252,29 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...`}
             </div>
           </div>
 
+          {/* 感度設定 */}
+          <div className="w-full bg-green-900 rounded-2xl p-4 shadow-lg">
+            <p className="text-white font-bold text-sm mb-2">投げやすさ（感度）— 自分だけに適用</p>
+            <div className="flex flex-col gap-2">
+              {([1, 2, 3] as Sensitivity[]).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setSensitivity(s)}
+                  className={`w-full py-2 px-3 rounded-xl font-bold text-left text-sm flex items-center gap-2 transition-all ${
+                    sensitivity === s ? "bg-yellow-500 text-black" : "bg-green-800 text-green-200"
+                  }`}
+                >
+                  <span>感度 {s}</span>
+                  <span className="font-normal opacity-90">
+                    {s === 1 && "頑張って投げる ⭐"}
+                    {s === 2 && "普通に投げる"}
+                    {s === 3 && "簡単に遠くへ飛ぶ"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* 部屋を作る */}
           <button
             onClick={createRoom}
@@ -322,6 +348,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...`}
             mode="online"
             myColor={myColor}
             boardSize={gameBoardSize}
+            sensitivity={sensitivity}
             onMove={sendMove}
           />
         </div>
