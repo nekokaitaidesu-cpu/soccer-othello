@@ -127,17 +127,22 @@ export default function OnlinePage() {
     disconnectedColorsRef.current = [...disconnectedColorsRef.current, leftColor];
     const remainingConns = [conn1Ref.current, conn2Ref.current].filter(Boolean).length;
     if (remainingConns === 0) {
-      // 全員退出 → メニューへ
       setOnlineState("opponent_left");
       destroyPeer();
       return;
     }
-    setDisconnectedMsg(`${leftColor === "black" ? "⚫黒" : leftColor === "white" ? "⚪白" : "🔴赤"}が切断しました。CPUが代わります`);
+    const colorLabel = leftColor === "black" ? "⚫黒" : leftColor === "white" ? "⚪白" : "🔴赤";
+    setDisconnectedMsg(`${colorLabel}が切断しました。CPUが代わります`);
     // 残ったゲストに通知
     const notifyMsg: GameMessage = { type: "player_left", leftColor };
     conn1Ref.current?.send(notifyMsg);
     conn2Ref.current?.send(notifyMsg);
-  }, [destroyPeer]);
+    // 切断時点でそのプレイヤーのターンだった場合、即CPU起動（onTurnChangeは再発火しないため）
+    const cp = gameRef.current?.getCurrentPlayer();
+    if (cp === leftColor) {
+      setTimeout(() => triggerCPUForDisconnected(leftColor), CPU_THINK_DELAY);
+    }
+  }, [destroyPeer, triggerCPUForDisconnected]);
 
   // ============================================================
   // 接続セットアップ（ゲスト側）

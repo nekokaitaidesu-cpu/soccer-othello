@@ -27,6 +27,7 @@ import {
 export interface GameCanvasHandle {
   applyExternalMove: (row: number, col: number, player: Player) => void;
   getBoard: () => Board;
+  getCurrentPlayer: () => Player;
 }
 
 export type Sensitivity = 1 | 2 | 3;
@@ -626,6 +627,9 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       },
       getBoard() {
         return boardRef.current;
+      },
+      getCurrentPlayer() {
+        return currentPlayerRef.current;
       },
     }));
 
