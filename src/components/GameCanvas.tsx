@@ -497,6 +497,11 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           });
         }
 
+        // online: 最終着弾マスが確定したここで送信（リダイレクト後も含め正しい座標）
+        if (mode === "online" && player === myColor) {
+          onMoveRef.current?.(row, col);
+        }
+
         boardRef.current = result.newBoard;
         moveCountRef.current += 1;
         impactCellRef.current = { row, col };
@@ -1072,10 +1077,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         const bs = boardSizeRef.current;
         const target = computeTargetFromVelocity(dragPos.x, vx, vy, bs, L);
         const cp = currentPlayerRef.current;
-
-        if (mode === "online" && cp === myColor) {
-          onMoveRef.current?.(target.row, target.col);
-        }
+        // ※ online の送信は handleImpact で最終着弾マスが確定してから行う
 
         const targetX = L.boardX + target.col * L.cellSize + L.cellSize / 2;
         const targetY = L.boardY + target.row * L.cellSize + L.cellSize / 2;
