@@ -422,13 +422,30 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           const startY = L.boardY + row * L.cellSize + L.cellSize / 2;
 
           if (nextRow < 0 || nextRow >= bs || nextCol < 0 || nextCol >= bs) {
-            // 盤外に飛び出す → 端に向かって飛んで煙で消える
-            const edgeX = startX + dc * L.cellSize * 1.8;
-            const edgeY = startY + dr * L.cellSize * 1.8;
+            // 盤外に飛び出す → 盤面の端（キャンバス内）に向かって飛んで煙で消える
+            // 左右はX方向の端に、上下はY方向の端にクランプして必ず画面内に収める
+            let edgeX: number;
+            let edgeY: number;
+            let edgeArcH: number;
+            if (dc !== 0) {
+              // 左右方向: 盤面の左端または右端に向かって水平に飛ぶ
+              edgeX = dc < 0
+                ? L.boardX + L.ballRadius              // 左端
+                : L.boardX + L.boardW - L.ballRadius;  // 右端
+              edgeY = startY;
+              edgeArcH = 0; // 水平移動なのでアーク不要
+            } else {
+              // 上下方向: 盤面の上端または下端に向かって飛ぶ
+              edgeX = startX;
+              edgeY = dr < 0
+                ? L.boardY + L.ballRadius              // 上端
+                : L.boardY + L.boardH - L.ballRadius;  // 下端
+              edgeArcH = L.cellSize * 0.3;
+            }
             ballAnimRef.current = {
               active: true,
               startX, startY, targetX: edgeX, targetY: edgeY,
-              progress: 0, duration: 180, arcH: 8,
+              progress: 0, duration: 200, arcH: edgeArcH,
               targetRow: nextRow, targetCol: nextCol, player,
               isOffBoard: true,
             };
@@ -604,15 +621,23 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
               const ex = anim.targetX;
               const ey = anim.targetY;
               const pid = popIdRef.current++;
-              for (let i = 0; i < 6; i++) {
+              // 進行方向に応じて煙の拡散方向を変える
+              const offAnim = ballAnimRef.current;
+              const spreadDx = offAnim.targetX - offAnim.startX;
+              const spreadDy = offAnim.targetY - offAnim.startY;
+              const isHoriz = Math.abs(spreadDx) > Math.abs(spreadDy);
+              for (let i = 0; i < 10; i++) {
+                // 左右方向なら縦方向に広がる煙、上下なら横方向に広がる煙
+                const perpX = isHoriz ? (Math.random() - 0.5) * 40 : (Math.random() - 0.5) * 16;
+                const perpY = isHoriz ? (Math.random() - 0.5) * 16 : (Math.random() - 0.5) * 40;
                 smokeParticlesRef.current.push({
                   id: pid * 100 + i,
                   x: ex, y: ey,
-                  offsetX: (Math.random() - 0.5) * 24,
-                  offsetY: (Math.random() - 0.5) * 24,
-                  maxRadius: 8 + Math.random() * 12,
+                  offsetX: perpX,
+                  offsetY: perpY,
+                  maxRadius: 10 + Math.random() * 16,
                   startTime: Date.now(),
-                  duration: 600 + Math.random() * 200,
+                  duration: 700 + Math.random() * 300,
                 });
               }
               textPopsRef.current.push({
