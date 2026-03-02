@@ -17,6 +17,7 @@ import {
   countPieces,
   getWinner,
   getCPUMove,
+  findNearestValidCell,
 } from "@/lib/gameLogic";
 
 // ============================================================
@@ -43,36 +44,25 @@ interface FlyingPiece {
   color: Player;
 }
 
-/** 放物線アニメーション（投げ→頂点→落下→着弾） */
+/** 放物線アニメーション */
 interface BallAnim {
   active: boolean;
   startX: number;
   startY: number;
   targetX: number;
   targetY: number;
-  progress: number; // 0→1
-  duration: number; // ms
-  arcH: number;     // 放物線の高さオフセット
+  progress: number;
+  duration: number;
+  arcH: number;
   targetRow: number;
   targetCol: number;
   player: Player;
 }
 
-/** コインフリップアニメーション中のセル */
-interface FlippingCell {
-  id: number;
-  row: number;
-  col: number;
-  progress: number;
-  fromPlayer: Player;
-  toPlayer: Player;
-  startTime: number;
-}
-
 type GamePhase =
   | "idle"
-  | "aiming"       // ボールをドラッグ中
-  | "flying"       // 放物線アーク飛翔中
+  | "aiming"
+  | "flying"
   | "impact"
   | "cpu_thinking"
   | "gameover";
@@ -87,39 +77,16 @@ const BALL_RADIUS_RATIO = 0.07;
 const MAX_CANVAS_W = 480;
 const IMPACT_DURATION = 350;
 const CPU_THINK_DELAY = 700;
-const FLIP_DURATION = 420;
-const FLIP_STAGGER = 70;
-
-// --- ユーザー投球キャリブレーション ---
-// GRAVITY: 物理シミュ用（どのマスに飛ぶかの計算のみ）
-// VELOCITY_SCALE: (px/ms) → (px/frame 相当) の変換係数
-// 「かなり速いスワイプでようやく最上段に届く」チューニング
 const GRAVITY = 0.3;
 const VELOCITY_SCALE = 7;
-
-// --- 放物線アーク描画パラメータ ---
-// vertDist = startY - targetY（目標が遠いほど大きい）
-// arcH = vertDist * ARC_FACTOR + ARC_BASE
-// 近いマス（row7）は控えめなアーク、遠いマス（row0）は大きなアーク
 const ARC_FACTOR = 0.6;
-const ARC_BASE   = 60;
+const ARC_BASE = 60;
 
 // ============================================================
-// スワイプ速度から「どのセルに着弾するか」を直接計算
-//
-// 【行の決め方】
-//   エネルギー保存則で「ボール休止位置(ballRestY)から盤面底辺(boardBottom)に
-//   到達したとき残る上昇速度 v0_board」を求め、そこから更に届く高さで行を決定。
-//   vy が弱くて boardBottom まで届かない場合は row=7（最前列）に強制着弾。
-//
-// 【列の決め方】
-//   boardBottom 到達までの飛行時間 t を使い、
-//   dragX + vx*t で横方向の着弾X座標を計算。届かない場合は放物線頂点のXで代用。
-//
-// → 必ず 0-7 の valid なセルを返す（ミスなし）
+// 着弾セル計算（スワイプ速度 → row/col）
 // ============================================================
 function computeTargetFromVelocity(
-  dragX: number,       // ドラッグ離した位置X（横方向の起点）
+  dragX: number,
   vx: number,
   vy: number,
   L: {
@@ -129,33 +96,24 @@ function computeTargetFromVelocity(
   }
 ): { row: number; col: number } {
   const boardBottom = L.boardY + L.boardH;
-  const heightDiff = L.ballRestY - boardBottom; // 正値 ≈ 91px（ボール静止位置から盤面底辺まで）
+  const heightDiff = L.ballRestY - boardBottom;
 
-  // -- 行の計算 --
-  // v0_board^2 = vy^2 - 2*g*heightDiff  （エネルギー保存）
   const v0BoardSq = vy * vy - 2 * GRAVITY * heightDiff;
   let row: number;
-  let tToCross: number; // boardBottom に到達するまでの時間
+  let tToCross: number;
 
   if (v0BoardSq <= 0) {
-    // 弱いスワイプ → boardBottom まで届かない → 最前列(row7)に着弾
     row = BOARD_SIZE - 1;
-    // 放物線の頂点時刻を代用（横方向計算用）
-    tToCross = -vy / GRAVITY; // apex time
+    tToCross = -vy / GRAVITY;
   } else {
     const v0Board = Math.sqrt(v0BoardSq);
     const maxReach = (v0Board * v0Board) / (2 * GRAVITY);
     row = Math.max(0, Math.min(BOARD_SIZE - 1, Math.floor((L.boardH - maxReach) / L.cellSize)));
-
-    // boardBottom 到達時間：0.5*g*t^2 + vy*t + heightDiff = 0
-    // → t = (-vy - sqrt(v0BoardSq)) / g  （小さい正の根）
     tToCross = (-vy - v0Board) / GRAVITY;
   }
 
-  // -- 列の計算 --
   const xAtCross = dragX + vx * tToCross;
   const col = Math.max(0, Math.min(BOARD_SIZE - 1, Math.floor((xAtCross - L.boardX) / L.cellSize)));
-
   return { row, col };
 }
 
@@ -164,9 +122,7 @@ function computeTargetFromVelocity(
 // ============================================================
 function drawRoundRect(
   ctx: CanvasRenderingContext2D,
-  x: number, y: number,
-  w: number, h: number,
-  r: number
+  x: number, y: number, w: number, h: number, r: number
 ) {
   ctx.beginPath();
   ctx.roundRect(x, y, w, h, r);
@@ -178,13 +134,12 @@ function drawPiece(
   radius: number,
   player: Player,
   alpha = 1,
-  scale = 1,
-  scaleX = 1
+  scale = 1
 ) {
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(x, y);
-  ctx.scale(scale * scaleX, scale);
+  ctx.scale(scale, scale);
 
   ctx.shadowColor = "rgba(0,0,0,0.5)";
   ctx.shadowBlur = 6;
@@ -284,12 +239,10 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    // ゲーム状態
     const boardRef = useRef<Board>(createInitialBoard());
     const currentPlayerRef = useRef<Player>("black");
     const gamePhaseRef = useRef<GamePhase>("idle");
     const flyingPiecesRef = useRef<FlyingPiece[]>([]);
-    const flippingCellsRef = useRef<FlippingCell[]>([]);
     const ballAnimRef = useRef<BallAnim>({
       active: false,
       startX: 0, startY: 0,
@@ -302,12 +255,10 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const impactCellRef = useRef<{ row: number; col: number } | null>(null);
     const flyPieceIdRef = useRef(0);
 
-    // ドラッグ状態
     const isDraggingRef = useRef(false);
     const ballDragPosRef = useRef({ x: 0, y: 0 });
     const dragHistoryRef = useRef<{ x: number; y: number; t: number }[]>([]);
 
-    // レイアウト
     const layoutRef = useRef({
       canvasW: 360, canvasH: 600,
       cellSize: 45,
@@ -329,8 +280,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
 
     const lastRenderTime = useRef(0);
     const animFrameRef = useRef(0);
-
-    // onMove の最新参照（クロージャ問題回避）
     const onMoveRef = useRef(onMove);
     useEffect(() => { onMoveRef.current = onMove; }, [onMove]);
 
@@ -426,13 +375,34 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         const result = applyMove(boardRef.current, row, col, player);
 
         if (!result.valid) {
-          gamePhaseRef.current = "idle";
-          ballAnimRef.current.active = false;
-          syncDisplayState("自分のコマには当たれません！もう一度");
+          // 自分のコマに着弾 → 近くの有効セルにリダイレクト
+          const redirect = findNearestValidCell(boardRef.current, row, col, player);
+          if (redirect) {
+            const L = layoutRef.current;
+            const startX = L.boardX + col * L.cellSize + L.cellSize / 2;
+            const startY = L.boardY + row * L.cellSize + L.cellSize / 2;
+            const targetX = L.boardX + redirect.col * L.cellSize + L.cellSize / 2;
+            const targetY = L.boardY + redirect.row * L.cellSize + L.cellSize / 2;
+            const dist = Math.hypot(targetX - startX, targetY - startY);
+            ballAnimRef.current = {
+              active: true,
+              startX, startY, targetX, targetY,
+              progress: 0,
+              duration: 200 + dist * 0.4,
+              arcH: Math.max(20, dist * 0.2),
+              targetRow: redirect.row, targetCol: redirect.col, player,
+            };
+            gamePhaseRef.current = "flying";
+          } else {
+            // 有効セルなし（ほぼ起きない）
+            gamePhaseRef.current = "idle";
+            ballAnimRef.current.active = false;
+            syncDisplayState();
+          }
           return;
         }
 
-        // 直接叩いたコマの吹き飛ばしエフェクト
+        // 相手コマを叩いた → 吹き飛ばしエフェクト
         if (result.replaced) {
           const L = layoutRef.current;
           const px = L.boardX + col * L.cellSize + L.cellSize / 2;
@@ -451,21 +421,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           });
         }
 
-        // ひっくり返るコマのフリップアニメーション登録
-        const opponent: Player = player === "black" ? "white" : "black";
-        const now = Date.now();
-        for (let i = 0; i < result.flipped.length; i++) {
-          const { row: fr, col: fc } = result.flipped[i];
-          flippingCellsRef.current.push({
-            id: flyPieceIdRef.current++,
-            row: fr, col: fc,
-            progress: 0,
-            fromPlayer: opponent,
-            toPlayer: player,
-            startTime: now + i * FLIP_STAGGER,
-          });
-        }
-
         boardRef.current = result.newBoard;
         impactCellRef.current = { row, col };
         gamePhaseRef.current = "impact";
@@ -473,16 +428,11 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         ballAnimRef.current.active = false;
 
         const winner = getWinner(boardRef.current);
-        const flipTotalMs = result.flipped.length > 0
-          ? (result.flipped.length - 1) * FLIP_STAGGER + FLIP_DURATION
-          : 0;
-        const totalDelay = Math.max(IMPACT_DURATION, flipTotalMs);
-
         if (winner) {
           setTimeout(() => {
             gamePhaseRef.current = "gameover";
             syncDisplayState();
-          }, totalDelay);
+          }, IMPACT_DURATION);
           return;
         }
 
@@ -497,12 +447,24 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
             syncDisplayState();
             setTimeout(() => {
               const cpuMove = getCPUMove(boardRef.current, next);
-              if (cpuMove) throwBall(cpuMove.row, cpuMove.col, next);
+              if (cpuMove) {
+                // CPUのブレ（40%:完璧、40%:±1マス、20%:±2マス）
+                const rand = Math.random();
+                let dr = 0, dc = 0;
+                if (rand > 0.4) {
+                  const amount = rand > 0.8 ? 2 : 1;
+                  dr = Math.round((Math.random() - 0.5) * 2 * amount);
+                  dc = Math.round((Math.random() - 0.5) * 2 * amount);
+                }
+                const nRow = Math.max(0, Math.min(BOARD_SIZE - 1, cpuMove.row + dr));
+                const nCol = Math.max(0, Math.min(BOARD_SIZE - 1, cpuMove.col + dc));
+                throwBall(nRow, nCol, next);
+              }
             }, CPU_THINK_DELAY);
           } else {
             syncDisplayState();
           }
-        }, totalDelay);
+        }, IMPACT_DURATION);
       },
       [mode, myColor, throwBall]
     );
@@ -567,24 +529,21 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         const L = layoutRef.current;
         const phase = gamePhaseRef.current;
 
-        // --- 放物線アーク更新 ---
+        // 放物線アーク更新
         if (phase === "flying" && ballAnimRef.current.active) {
           const anim = ballAnimRef.current;
           anim.progress = Math.min(1, anim.progress + dt / anim.duration);
           ballRotationRef.current += 0.13;
-
           if (anim.progress >= 1) {
-            // 放物線の終点（落下しきった）→ 着弾
             handleImpact(anim.targetRow, anim.targetCol, anim.player);
           }
         }
 
-        // --- ドラッグ中ボール回転 ---
         if (phase === "aiming") {
           ballRotationRef.current += 0.04;
         }
 
-        // --- 飛び散るコマ更新 ---
+        // 飛び散るコマ更新
         flyingPiecesRef.current = flyingPiecesRef.current
           .map((fp) => ({
             ...fp,
@@ -595,15 +554,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           }))
           .filter((fp) => fp.opacity > 0);
 
-        // --- フリップアニメーション更新 ---
-        const now = Date.now();
-        flippingCellsRef.current = flippingCellsRef.current
-          .map((fc) => ({
-            ...fc,
-            progress: Math.min(1, Math.max(0, (now - fc.startTime) / FLIP_DURATION)),
-          }))
-          .filter((fc) => now < fc.startTime + FLIP_DURATION);
-
         // ============================================================
         // 描画
         // ============================================================
@@ -612,7 +562,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         drawHeader(ctx, L);
         drawBoard(ctx, L);
 
-        // --- コマ描画（フリップアニメ含む）---
+        // コマ描画
         const board = boardRef.current;
         for (let r = 0; r < BOARD_SIZE; r++) {
           for (let c = 0; c < BOARD_SIZE; c++) {
@@ -621,55 +571,36 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
             const cx = L.boardX + c * L.cellSize + L.cellSize / 2;
             const cy = L.boardY + r * L.cellSize + L.cellSize / 2;
 
-            // 着弾エフェクト（スケール跳ね）
+            // 着弾エフェクト（バウンス）
             let impactScale = 1;
             const ic = impactCellRef.current;
             if (ic && ic.row === r && ic.col === c && phase === "impact") {
               const elapsed = Date.now() - impactTimerRef.current;
               impactScale = 1 + 0.35 * Math.sin((elapsed / IMPACT_DURATION) * Math.PI);
             }
-
-            // フリップアニメーション
-            const flip = flippingCellsRef.current.find(
-              (f) => f.row === r && f.col === c && now >= f.startTime
-            );
-            if (flip) {
-              const p = flip.progress;
-              const scaleX = Math.abs(Math.cos(p * Math.PI));
-              const displayPlayer = p < 0.5 ? flip.fromPlayer : flip.toPlayer;
-              drawPiece(ctx, cx, cy, L.cellSize * 0.38, displayPlayer, 1, impactScale, scaleX);
-            } else {
-              drawPiece(ctx, cx, cy, L.cellSize * 0.38, cell, 1, impactScale);
-            }
+            drawPiece(ctx, cx, cy, L.cellSize * 0.38, cell, 1, impactScale);
           }
         }
 
-        // --- 飛び散るコマ ---
+        // 飛び散るコマ
         for (const fp of flyingPiecesRef.current) {
           drawPiece(ctx, fp.x, fp.y, fp.radius, fp.color, fp.opacity);
         }
 
-        // --- ボールエリア背景 ---
+        // ボールエリア背景
         drawBallArea(ctx, L);
 
-        // --- ボール描画 ---
+        // ボール描画
         if (phase === "flying" && ballAnimRef.current.active) {
-          // 放物線アーク: 投げ → 浮く → 頂点 → 落ちる
           const anim = ballAnimRef.current;
           const t = anim.progress;
           const bx = lerp(anim.startX, anim.targetX, t);
-          // y = startY→targetY の直線 − arcH*sin(t*π)
-          // t=0: by=startY（投げた位置）
-          // t=0.5: by=midY - arcH（頂点、最も高い位置）
-          // t=1: by=targetY（着弾、落ちきった位置）
           const by = lerp(anim.startY, anim.targetY, t) - anim.arcH * Math.sin(t * Math.PI);
           drawSoccerBall(ctx, bx, by, L.ballRadius, ballRotationRef.current);
         } else if (phase === "aiming") {
-          // ドラッグ中：ボールが指に追従
           const dp = ballDragPosRef.current;
           drawSoccerBall(ctx, dp.x, dp.y, L.ballRadius, ballRotationRef.current);
         } else {
-          // 待機・着弾後など：元の位置
           drawSoccerBall(ctx, L.ballRestX, L.ballRestY, L.ballRadius, ballRotationRef.current);
         }
 
@@ -747,7 +678,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         ctx.lineTo(L.boardX + L.boardW, L.boardY + i * L.cellSize);
         ctx.stroke();
       }
-
       ctx.fillStyle = "rgba(255,255,255,0.3)";
       for (const [r, c] of [[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]]) {
         ctx.beginPath();
@@ -877,7 +807,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           return;
         }
 
-        // スワイプ速度を計算（直近ドラッグ履歴から）
         const recent = history.slice(-5);
         const first = recent[0];
         const last = recent[recent.length - 1];
@@ -885,7 +814,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         const vx = (last.x - first.x) / dt * VELOCITY_SCALE;
         const vy = (last.y - first.y) / dt * VELOCITY_SCALE;
 
-        // 上向きの勢いが全くなければキャンセル（ほぼゼロ = 意図しない触れ）
         if (vy > -0.5) {
           gamePhaseRef.current = "idle";
           syncDisplayState("上に向かってスワイプして投げよう！");
@@ -893,21 +821,15 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         }
 
         const L = layoutRef.current;
-
-        // スワイプ速度から着弾セルを直接計算（必ず valid なセルを返す）
         const target = computeTargetFromVelocity(dragPos.x, vx, vy, L);
-
         const cp = currentPlayerRef.current;
 
-        // オンラインモード：自分の手を送信
         if (mode === "online" && cp === myColor) {
           onMoveRef.current?.(target.row, target.col);
         }
 
-        // 目標セルへの放物線アーク開始
         const targetX = L.boardX + target.col * L.cellSize + L.cellSize / 2;
         const targetY = L.boardY + target.row * L.cellSize + L.cellSize / 2;
-        // 投げた位置（dragPos）から目標まで
         const vertDist = dragPos.y - targetY;
         const arcH = Math.max(ARC_BASE, vertDist * ARC_FACTOR + ARC_BASE);
         const duration = 380 + Math.max(0, vertDist) * 0.85;
@@ -961,7 +883,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       currentPlayerRef.current = "black";
       gamePhaseRef.current = "idle";
       flyingPiecesRef.current = [];
-      flippingCellsRef.current = [];
       ballAnimRef.current.active = false;
       isDraggingRef.current = false;
       dragHistoryRef.current = [];

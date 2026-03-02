@@ -7,7 +7,7 @@ export interface MoveResult {
   newBoard: Board;
   replaced: boolean;
   valid: boolean;
-  flipped: { row: number; col: number }[]; // タテヨコナナメで挟んだコマ
+  flipped: { row: number; col: number }[]; // 現在は常に空（ひっくり返しなし）
 }
 
 export function createInitialBoard(): Board {
@@ -21,46 +21,12 @@ export function createInitialBoard(): Board {
   return board;
 }
 
-/** 指定セルにplayerが置いたとき、挟まれてひっくり返るセルを返す */
-export function getFlippedCells(
-  board: Board,
-  row: number,
-  col: number,
-  player: Player
-): { row: number; col: number }[] {
-  const opponent: Player = player === "black" ? "white" : "black";
-  const directions = [
-    [-1, 0], [1, 0], [0, -1], [0, 1],
-    [-1, -1], [-1, 1], [1, -1], [1, 1],
-  ];
-  const toFlip: { row: number; col: number }[] = [];
-
-  for (const [dr, dc] of directions) {
-    const line: { row: number; col: number }[] = [];
-    let r = row + dr;
-    let c = col + dc;
-    while (
-      r >= 0 && r < BOARD_SIZE &&
-      c >= 0 && c < BOARD_SIZE &&
-      board[r][c] === opponent
-    ) {
-      line.push({ row: r, col: c });
-      r += dr;
-      c += dc;
-    }
-    // ラインの先に自分のコマがあれば挟んでいる
-    if (
-      line.length > 0 &&
-      r >= 0 && r < BOARD_SIZE &&
-      c >= 0 && c < BOARD_SIZE &&
-      board[r][c] === player
-    ) {
-      toFlip.push(...line);
-    }
-  }
-  return toFlip;
-}
-
+/**
+ * コマを置く。
+ * - 空マス → 自分のコマを配置
+ * - 相手のコマ → 1-1交換（ひっくり返しなし）
+ * - 自分のコマ → invalid（呼び出し元でリダイレクト処理）
+ */
 export function applyMove(
   board: Board,
   row: number,
@@ -70,19 +36,38 @@ export function applyMove(
   if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) {
     return { newBoard: board, replaced: false, valid: false, flipped: [] };
   }
-  // 自分のコマには当たれない（リトライ）
   if (board[row][col] === player) {
     return { newBoard: board, replaced: false, valid: false, flipped: [] };
   }
   const newBoard = board.map((r) => [...r]);
   const replaced = newBoard[row][col] !== null; // 相手コマを直接叩いた
-  const flipped = getFlippedCells(board, row, col, player);
-
   newBoard[row][col] = player;
-  for (const { row: fr, col: fc } of flipped) {
-    newBoard[fr][fc] = player;
+  return { newBoard, replaced, valid: true, flipped: [] };
+}
+
+/**
+ * 自分のコマに着弾したとき、最も近い「空きマスまたは相手コマ」を返す。
+ * ユークリッド距離が最小のセルを選ぶ。
+ */
+export function findNearestValidCell(
+  board: Board,
+  row: number,
+  col: number,
+  player: Player
+): { row: number; col: number } | null {
+  const candidates: { row: number; col: number; dist: number }[] = [];
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (r === row && c === col) continue;
+      if (board[r][c] !== player) {
+        const dr = r - row, dc = c - col;
+        candidates.push({ row: r, col: c, dist: dr * dr + dc * dc });
+      }
+    }
   }
-  return { newBoard, replaced, valid: true, flipped };
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.dist - b.dist);
+  return { row: candidates[0].row, col: candidates[0].col };
 }
 
 export function countPieces(board: Board): {
