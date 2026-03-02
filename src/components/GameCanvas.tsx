@@ -19,7 +19,6 @@ import {
   getTurnLimit,
   determineWinner,
   getCPUMove,
-  findNearestValidCell,
 } from "@/lib/gameLogic";
 
 // ============================================================
@@ -60,6 +59,26 @@ interface BallAnim {
   targetRow: number;
   targetCol: number;
   player: Player;
+  isOffBoard?: boolean; // 盤外に飛び出す場合
+}
+
+/** 煙パーティクル */
+interface SmokeParticle {
+  id: number;
+  x: number; y: number;
+  offsetX: number; offsetY: number;
+  maxRadius: number;
+  startTime: number;
+  duration: number;
+}
+
+/** テキストポップ（ボスン等） */
+interface TextPop {
+  id: number;
+  x: number; y: number;
+  text: string;
+  startTime: number;
+  duration: number;
 }
 
 type GamePhase =
@@ -262,6 +281,9 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const moveCountRef = useRef(0);
     const winnerRef = useRef<Player | "draw" | null>(null);
     const flippedCellsRef = useRef<{ row: number; col: number; startTime: number }[]>([]);
+    const smokeParticlesRef = useRef<SmokeParticle[]>([]);
+    const textPopsRef = useRef<TextPop[]>([]);
+    const popIdRef = useRef(0);
 
     const isDraggingRef = useRef(false);
     const ballDragPosRef = useRef({ x: 0, y: 0 });
@@ -389,28 +411,42 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         const result = applyMove(boardRef.current, row, col, player);
 
         if (!result.valid) {
-          // 自分のコマに着弾 → 近くの有効セルにリダイレクト
-          const redirect = findNearestValidCell(boardRef.current, row, col, player);
-          if (redirect) {
-            const L = layoutRef.current;
-            const startX = L.boardX + col * L.cellSize + L.cellSize / 2;
-            const startY = L.boardY + row * L.cellSize + L.cellSize / 2;
-            const targetX = L.boardX + redirect.col * L.cellSize + L.cellSize / 2;
-            const targetY = L.boardY + redirect.row * L.cellSize + L.cellSize / 2;
+          // 自分のコマに着弾 → 上下左右ランダムに1マス移動
+          const DIRS = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
+          const [dr, dc] = DIRS[Math.floor(Math.random() * 4)];
+          const nextRow = row + dr;
+          const nextCol = col + dc;
+          const bs = boardSizeRef.current;
+          const L = layoutRef.current;
+          const startX = L.boardX + col * L.cellSize + L.cellSize / 2;
+          const startY = L.boardY + row * L.cellSize + L.cellSize / 2;
+
+          if (nextRow < 0 || nextRow >= bs || nextCol < 0 || nextCol >= bs) {
+            // 盤外に飛び出す → 端に向かって飛んで煙で消える
+            const edgeX = startX + dc * L.cellSize * 1.8;
+            const edgeY = startY + dr * L.cellSize * 1.8;
+            ballAnimRef.current = {
+              active: true,
+              startX, startY, targetX: edgeX, targetY: edgeY,
+              progress: 0, duration: 180, arcH: 8,
+              targetRow: nextRow, targetCol: nextCol, player,
+              isOffBoard: true,
+            };
+            gamePhaseRef.current = "flying";
+          } else {
+            // 次のマスへ弾む
+            const targetX = L.boardX + nextCol * L.cellSize + L.cellSize / 2;
+            const targetY = L.boardY + nextRow * L.cellSize + L.cellSize / 2;
             const dist = Math.hypot(targetX - startX, targetY - startY);
             ballAnimRef.current = {
               active: true,
               startX, startY, targetX, targetY,
               progress: 0,
-              duration: 200 + dist * 0.4,
-              arcH: Math.max(20, dist * 0.2),
-              targetRow: redirect.row, targetCol: redirect.col, player,
+              duration: 160 + dist * 0.3,
+              arcH: Math.max(12, dist * 0.18),
+              targetRow: nextRow, targetCol: nextCol, player,
             };
             gamePhaseRef.current = "flying";
-          } else {
-            gamePhaseRef.current = "idle";
-            ballAnimRef.current.active = false;
-            syncDisplayState();
           }
           return;
         }
@@ -563,7 +599,59 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           anim.progress = Math.min(1, anim.progress + dt / anim.duration);
           ballRotationRef.current += 0.13;
           if (anim.progress >= 1) {
-            handleImpact(anim.targetRow, anim.targetCol, anim.player);
+            if (anim.isOffBoard) {
+              // 盤外 → 煙エフェクト＋ターン消費
+              const ex = anim.targetX;
+              const ey = anim.targetY;
+              const pid = popIdRef.current++;
+              for (let i = 0; i < 6; i++) {
+                smokeParticlesRef.current.push({
+                  id: pid * 100 + i,
+                  x: ex, y: ey,
+                  offsetX: (Math.random() - 0.5) * 24,
+                  offsetY: (Math.random() - 0.5) * 24,
+                  maxRadius: 8 + Math.random() * 12,
+                  startTime: Date.now(),
+                  duration: 600 + Math.random() * 200,
+                });
+              }
+              textPopsRef.current.push({
+                id: pid,
+                x: ex, y: ey - 16,
+                text: "ボスン",
+                startTime: Date.now(),
+                duration: 900,
+              });
+              ballAnimRef.current.active = false;
+              // ターン交代（コマ未配置）
+              const next: Player = anim.player === "black" ? "white" : "black";
+              currentPlayerRef.current = next;
+              gamePhaseRef.current = "idle";
+              if (mode === "cpu" && next !== myColor) {
+                gamePhaseRef.current = "cpu_thinking";
+                syncDisplayState();
+                setTimeout(() => {
+                  const bs = boardSizeRef.current;
+                  const cpuMove = getCPUMove(boardRef.current, next);
+                  if (cpuMove) {
+                    const rand = Math.random();
+                    let dr2 = 0, dc2 = 0;
+                    if (rand > 0.4) {
+                      const amount = rand > 0.8 ? 2 : 1;
+                      dr2 = Math.round((Math.random() - 0.5) * 2 * amount);
+                      dc2 = Math.round((Math.random() - 0.5) * 2 * amount);
+                    }
+                    const nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + dr2));
+                    const nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + dc2));
+                    throwBall(nRow, nCol, next);
+                  }
+                }, CPU_THINK_DELAY);
+              } else {
+                syncDisplayState();
+              }
+            } else {
+              handleImpact(anim.targetRow, anim.targetCol, anim.player);
+            }
           }
         }
 
@@ -650,6 +738,44 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         // 飛び散るコマ
         for (const fp of flyingPiecesRef.current) {
           drawPiece(ctx, fp.x, fp.y, fp.radius, fp.color, fp.opacity);
+        }
+
+        // 煙パーティクル
+        const nowSmoke = Date.now();
+        smokeParticlesRef.current = smokeParticlesRef.current.filter(
+          (p) => nowSmoke - p.startTime < p.duration
+        );
+        for (const p of smokeParticlesRef.current) {
+          const t = (nowSmoke - p.startTime) / p.duration;
+          const r = p.maxRadius * Math.sqrt(t);
+          ctx.save();
+          ctx.globalAlpha = 0.7 * (1 - t);
+          ctx.fillStyle = "#aaaaaa";
+          ctx.beginPath();
+          ctx.arc(p.x + p.offsetX * t, p.y + p.offsetY * t, r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // テキストポップ（ボスン）
+        textPopsRef.current = textPopsRef.current.filter(
+          (p) => nowSmoke - p.startTime < p.duration
+        );
+        for (const tp of textPopsRef.current) {
+          const t = (nowSmoke - tp.startTime) / tp.duration;
+          const rise = 28 * t;
+          const alpha = t < 0.3 ? t / 0.3 : 1 - (t - 0.3) / 0.7;
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.font = `bold ${L.cellSize * 0.5}px sans-serif`;
+          ctx.fillStyle = "#ffffff";
+          ctx.strokeStyle = "rgba(0,0,0,0.7)";
+          ctx.lineWidth = 3;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.strokeText(tp.text, tp.x, tp.y - rise);
+          ctx.fillText(tp.text, tp.x, tp.y - rise);
+          ctx.restore();
         }
 
         // ボールエリア背景
@@ -979,6 +1105,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       moveCountRef.current = 0;
       winnerRef.current = null;
       flippedCellsRef.current = [];
+      smokeParticlesRef.current = [];
+      textPopsRef.current = [];
       syncDisplayState();
     };
 
