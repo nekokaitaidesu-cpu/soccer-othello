@@ -570,6 +570,13 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     useImperativeHandle(ref, () => ({
       applyExternalMove(row: number, col: number) {
         if (gamePhaseRef.current !== "idle") return;
+        // -1,-1 は盤外消滅シグナル: コマ未配置でターンを自分に切り替える
+        if (row === -1 && col === -1) {
+          currentPlayerRef.current = myColor;
+          gamePhaseRef.current = "idle";
+          syncDisplayState();
+          return;
+        }
         const opponent: Player = myColor === "black" ? "white" : "black";
         throwBall(row, col, opponent);
       },
@@ -667,6 +674,10 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
               const next: Player = anim.player === "black" ? "white" : "black";
               currentPlayerRef.current = next;
               gamePhaseRef.current = "idle";
+              // online: 盤外消滅を相手に通知（-1,-1 = ターンスキップシグナル）
+              if (mode === "online" && anim.player === myColor) {
+                onMoveRef.current?.(-1, -1);
+              }
               if (mode === "cpu" && next !== myColor) {
                 gamePhaseRef.current = "cpu_thinking";
                 syncDisplayState();
