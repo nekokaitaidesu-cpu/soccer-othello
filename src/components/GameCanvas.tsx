@@ -10,12 +10,14 @@ import {
 } from "react";
 import {
   Board,
+  BoardSize,
   Player,
-  BOARD_SIZE,
   createInitialBoard,
   applyMove,
   countPieces,
   getWinner,
+  getTurnLimit,
+  determineWinner,
   getCPUMove,
   findNearestValidCell,
 } from "@/lib/gameLogic";
@@ -30,6 +32,7 @@ export interface GameCanvasHandle {
 export interface GameCanvasProps {
   mode: "solo" | "cpu" | "online";
   myColor?: Player;
+  boardSize?: BoardSize;
   onMove?: (row: number, col: number) => void;
 }
 
@@ -89,6 +92,7 @@ function computeTargetFromVelocity(
   dragX: number,
   vx: number,
   vy: number,
+  boardSize: number,
   L: {
     ballRestY: number;
     boardX: number; boardY: number; boardH: number;
@@ -103,17 +107,17 @@ function computeTargetFromVelocity(
   let tToCross: number;
 
   if (v0BoardSq <= 0) {
-    row = BOARD_SIZE - 1;
+    row = boardSize - 1;
     tToCross = -vy / GRAVITY;
   } else {
     const v0Board = Math.sqrt(v0BoardSq);
     const maxReach = (v0Board * v0Board) / (2 * GRAVITY);
-    row = Math.max(0, Math.min(BOARD_SIZE - 1, Math.floor((L.boardH - maxReach) / L.cellSize)));
+    row = Math.max(0, Math.min(boardSize - 1, Math.floor((L.boardH - maxReach) / L.cellSize)));
     tToCross = (-vy - v0Board) / GRAVITY;
   }
 
   const xAtCross = dragX + vx * tToCross;
-  const col = Math.max(0, Math.min(BOARD_SIZE - 1, Math.floor((xAtCross - L.boardX) / L.cellSize)));
+  const col = Math.max(0, Math.min(boardSize - 1, Math.floor((xAtCross - L.boardX) / L.cellSize)));
   return { row, col };
 }
 
@@ -235,11 +239,12 @@ function lerp(a: number, b: number, t: number) {
 // GameCanvas コンポーネント
 // ============================================================
 const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
-  function GameCanvas({ mode, myColor = "black", onMove }, ref) {
+  function GameCanvas({ mode, myColor = "black", boardSize = 6, onMove }, ref) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    const boardRef = useRef<Board>(createInitialBoard());
+    const boardSizeRef = useRef<BoardSize>(boardSize);
+    const boardRef = useRef<Board>(createInitialBoard(boardSize));
     const currentPlayerRef = useRef<Player>("black");
     const gamePhaseRef = useRef<GamePhase>("idle");
     const flyingPiecesRef = useRef<FlyingPiece[]>([]);
@@ -254,6 +259,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const impactTimerRef = useRef(0);
     const impactCellRef = useRef<{ row: number; col: number } | null>(null);
     const flyPieceIdRef = useRef(0);
+    const moveCountRef = useRef(0);
+    const winnerRef = useRef<Player | "draw" | null>(null);
 
     const isDraggingRef = useRef(false);
     const ballDragPosRef = useRef({ x: 0, y: 0 });
@@ -270,12 +277,14 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     });
 
     const [displayState, setDisplayState] = useState({
-      board: createInitialBoard() as Board,
+      board: createInitialBoard(boardSize) as Board,
       currentPlayer: "black" as Player,
       phase: "idle" as GamePhase,
       blackCount: 2, whiteCount: 2,
       winner: null as Player | "draw" | null,
       message: "",
+      moveCount: 0,
+      turnLimit: getTurnLimit(boardSize),
     });
 
     const lastRenderTime = useRef(0);
@@ -289,9 +298,10 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const calcLayout = useCallback(() => {
       const container = containerRef.current;
       if (!container) return;
+      const bs = boardSizeRef.current;
       const w = Math.min(container.clientWidth, MAX_CANVAS_W);
-      const cellSize = Math.floor(w / BOARD_SIZE);
-      const boardW = cellSize * BOARD_SIZE;
+      const cellSize = Math.floor(w / bs);
+      const boardW = cellSize * bs;
       const ballAreaH = Math.floor(boardW * BALL_AREA_RATIO);
       const ballRadius = Math.floor(boardW * BALL_RADIUS_RATIO);
       const canvasW = boardW;
@@ -320,9 +330,11 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     // ============================================================
     function syncDisplayState(msg?: string) {
       const { black, white } = countPieces(boardRef.current);
-      const winner = getWinner(boardRef.current);
+      const winner = winnerRef.current ?? getWinner(boardRef.current);
       const phase = gamePhaseRef.current;
       const cp = currentPlayerRef.current;
+      const mc = moveCountRef.current;
+      const tl = getTurnLimit(boardSizeRef.current);
 
       let message = msg ?? "";
       if (!msg) {
@@ -342,6 +354,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         board: boardRef.current.map((r) => [...r]) as Board,
         currentPlayer: cp, phase,
         blackCount: black, whiteCount: white, winner, message,
+        moveCount: mc, turnLimit: tl,
       });
     }
 
@@ -394,7 +407,6 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
             };
             gamePhaseRef.current = "flying";
           } else {
-            // 有効セルなし（ほぼ起きない）
             gamePhaseRef.current = "idle";
             ballAnimRef.current.active = false;
             syncDisplayState();
@@ -416,19 +428,25 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
             vx: Math.cos(angle) * speed,
             vy: Math.sin(angle) * speed - 4,
             opacity: 1,
-            radius: L.cellSize * 0.38,
+            radius: layoutRef.current.cellSize * 0.38,
             color: opponent,
           });
         }
 
         boardRef.current = result.newBoard;
+        moveCountRef.current += 1;
         impactCellRef.current = { row, col };
         gamePhaseRef.current = "impact";
         impactTimerRef.current = Date.now();
         ballAnimRef.current.active = false;
 
-        const winner = getWinner(boardRef.current);
-        if (winner) {
+        // 勝敗判定（盤面が埋まった or 手数上限）
+        const turnLimit = getTurnLimit(boardSizeRef.current);
+        const boardFull = getWinner(boardRef.current);
+        const turnLimitReached = moveCountRef.current >= turnLimit;
+
+        if (boardFull || turnLimitReached) {
+          winnerRef.current = determineWinner(boardRef.current);
           setTimeout(() => {
             gamePhaseRef.current = "gameover";
             syncDisplayState();
@@ -446,9 +464,9 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
             gamePhaseRef.current = "cpu_thinking";
             syncDisplayState();
             setTimeout(() => {
+              const bs = boardSizeRef.current;
               const cpuMove = getCPUMove(boardRef.current, next);
               if (cpuMove) {
-                // CPUのブレ（40%:完璧、40%:±1マス、20%:±2マス）
                 const rand = Math.random();
                 let dr = 0, dc = 0;
                 if (rand > 0.4) {
@@ -456,8 +474,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
                   dr = Math.round((Math.random() - 0.5) * 2 * amount);
                   dc = Math.round((Math.random() - 0.5) * 2 * amount);
                 }
-                const nRow = Math.max(0, Math.min(BOARD_SIZE - 1, cpuMove.row + dr));
-                const nCol = Math.max(0, Math.min(BOARD_SIZE - 1, cpuMove.col + dc));
+                const nRow = Math.max(0, Math.min(bs - 1, cpuMove.row + dr));
+                const nCol = Math.max(0, Math.min(bs - 1, cpuMove.col + dc));
                 throwBall(nRow, nCol, next);
               }
             }, CPU_THINK_DELAY);
@@ -528,6 +546,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
 
         const L = layoutRef.current;
         const phase = gamePhaseRef.current;
+        const bs = boardSizeRef.current;
 
         // 放物線アーク更新
         if (phase === "flying" && ballAnimRef.current.active) {
@@ -559,19 +578,18 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         // ============================================================
         ctx.clearRect(0, 0, L.canvasW, L.canvasH);
 
-        drawHeader(ctx, L);
-        drawBoard(ctx, L);
+        drawHeader(ctx, L, bs);
+        drawBoard(ctx, L, bs);
 
         // コマ描画
         const board = boardRef.current;
-        for (let r = 0; r < BOARD_SIZE; r++) {
-          for (let c = 0; c < BOARD_SIZE; c++) {
+        for (let r = 0; r < bs; r++) {
+          for (let c = 0; c < bs; c++) {
             const cell = board[r][c];
             if (!cell) continue;
             const cx = L.boardX + c * L.cellSize + L.cellSize / 2;
             const cy = L.boardY + r * L.cellSize + L.cellSize / 2;
 
-            // 着弾エフェクト（バウンス）
             let impactScale = 1;
             const ic = impactCellRef.current;
             if (ic && ic.row === r && ic.col === c && phase === "impact") {
@@ -604,7 +622,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           drawSoccerBall(ctx, L.ballRestX, L.ballRestY, L.ballRadius, ballRotationRef.current);
         }
 
-        drawBallAreaUI(ctx, L, phase);
+        drawBallAreaUI(ctx, L, phase, bs);
 
         animFrameRef.current = requestAnimationFrame(animate);
       },
@@ -614,14 +632,17 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     // ============================================================
     // ヘッダー描画
     // ============================================================
-    function drawHeader(ctx: CanvasRenderingContext2D, L: typeof layoutRef.current) {
+    function drawHeader(ctx: CanvasRenderingContext2D, L: typeof layoutRef.current, bs: BoardSize) {
       ctx.fillStyle = "#0d3d0d";
       ctx.fillRect(0, 0, L.canvasW, HEADER_H);
 
       const { black, white } = countPieces(boardRef.current);
       const cp = currentPlayerRef.current;
+      const mc = moveCountRef.current;
+      const tl = getTurnLimit(bs);
       ctx.save();
 
+      // 黒エリア（左）
       const blackActive = cp === "black";
       ctx.fillStyle = blackActive ? "rgba(0,0,0,0.8)" : "rgba(0,0,0,0.4)";
       drawRoundRect(ctx, 8, 8, L.canvasW / 2 - 16, HEADER_H - 16, 8);
@@ -637,6 +658,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ctx.textAlign = "left"; ctx.textBaseline = "middle";
       ctx.fillText(`黒 ${black}`, 44, HEADER_H / 2);
 
+      // 白エリア（右）
       const whiteActive = cp === "white";
       ctx.fillStyle = whiteActive ? "rgba(60,60,60,0.8)" : "rgba(40,40,40,0.4)";
       drawRoundRect(ctx, L.canvasW / 2 + 8, 8, L.canvasW / 2 - 16, HEADER_H - 16, 8);
@@ -652,13 +674,19 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ctx.textAlign = "left";
       ctx.fillText(`白 ${white}`, L.canvasW / 2 + 44, HEADER_H / 2);
 
+      // 手数表示（中央上部にうっすら）
+      ctx.font = `${Math.floor(HEADER_H * 0.28)}px sans-serif`;
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.textAlign = "center";
+      ctx.fillText(`${mc}/${tl}手`, L.canvasW / 2, HEADER_H - 6);
+
       ctx.restore();
     }
 
     // ============================================================
     // 盤面描画
     // ============================================================
-    function drawBoard(ctx: CanvasRenderingContext2D, L: typeof layoutRef.current) {
+    function drawBoard(ctx: CanvasRenderingContext2D, L: typeof layoutRef.current, bs: BoardSize) {
       const bgGrad = ctx.createLinearGradient(0, L.boardY, 0, L.boardY + L.boardH);
       bgGrad.addColorStop(0, "#1d6b1d");
       bgGrad.addColorStop(1, "#155215");
@@ -668,7 +696,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ctx.save();
       ctx.strokeStyle = "rgba(255,255,255,0.2)";
       ctx.lineWidth = 0.5;
-      for (let i = 0; i <= BOARD_SIZE; i++) {
+      for (let i = 0; i <= bs; i++) {
         ctx.beginPath();
         ctx.moveTo(L.boardX + i * L.cellSize, L.boardY);
         ctx.lineTo(L.boardX + i * L.cellSize, L.boardY + L.boardH);
@@ -678,8 +706,12 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         ctx.lineTo(L.boardX + L.boardW, L.boardY + i * L.cellSize);
         ctx.stroke();
       }
+      // スターポイント
+      const dots = bs === 8
+        ? [[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]]
+        : [[1, 1], [1, 4], [4, 1], [4, 4]];
       ctx.fillStyle = "rgba(255,255,255,0.3)";
-      for (const [r, c] of [[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]]) {
+      for (const [r, c] of dots) {
         ctx.beginPath();
         ctx.arc(L.boardX + c * L.cellSize, L.boardY + r * L.cellSize, 3, 0, Math.PI * 2);
         ctx.fill();
@@ -718,7 +750,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     function drawBallAreaUI(
       ctx: CanvasRenderingContext2D,
       L: typeof layoutRef.current,
-      phase: GamePhase
+      phase: GamePhase,
+      bs: BoardSize
     ) {
       const cp = currentPlayerRef.current;
       const isInteractable =
@@ -733,7 +766,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
 
       if (phase === "gameover") {
         const { black, white } = countPieces(boardRef.current);
-        const winner = getWinner(boardRef.current);
+        const winner = winnerRef.current ?? determineWinner(boardRef.current);
         const msg = winner === "draw" ? "引き分け！"
           : winner === "black" ? "⚫ 黒の勝ち！" : "⚪ 白の勝ち！";
         ctx.font = `bold ${L.cellSize * 0.55}px sans-serif`;
@@ -742,7 +775,14 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         ctx.fillText(msg, L.canvasW / 2, L.ballAreaY + L.ballAreaH - 8);
         ctx.font = `${L.cellSize * 0.4}px sans-serif`;
         ctx.fillStyle = "white";
+        ctx.shadowBlur = 0;
         ctx.fillText(`黒 ${black} ― 白 ${white}`, L.canvasW / 2, L.ballAreaY + L.ballAreaH - 8 - L.cellSize * 0.6);
+        // 手数表示
+        const mc = moveCountRef.current;
+        const tl = getTurnLimit(bs);
+        ctx.font = `${L.cellSize * 0.32}px sans-serif`;
+        ctx.fillStyle = "rgba(255,255,255,0.6)";
+        ctx.fillText(`${mc}手終了（上限 ${tl}手）`, L.canvasW / 2, L.ballAreaY + L.ballAreaH - 8 - L.cellSize * 1.15);
       } else if (phase === "aiming") {
         ctx.font = `${L.cellSize * 0.4}px sans-serif`;
         ctx.fillStyle = "#7eff7e";
@@ -821,7 +861,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         }
 
         const L = layoutRef.current;
-        const target = computeTargetFromVelocity(dragPos.x, vx, vy, L);
+        const bs = boardSizeRef.current;
+        const target = computeTargetFromVelocity(dragPos.x, vx, vy, bs, L);
         const cp = currentPlayerRef.current;
 
         if (mode === "online" && cp === myColor) {
@@ -879,7 +920,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     // リスタート
     // ============================================================
     const restart = () => {
-      boardRef.current = createInitialBoard();
+      const bs = boardSizeRef.current;
+      boardRef.current = createInitialBoard(bs);
       currentPlayerRef.current = "black";
       gamePhaseRef.current = "idle";
       flyingPiecesRef.current = [];
@@ -887,6 +929,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       isDraggingRef.current = false;
       dragHistoryRef.current = [];
       impactCellRef.current = null;
+      moveCountRef.current = 0;
+      winnerRef.current = null;
       syncDisplayState();
     };
 

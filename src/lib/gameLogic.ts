@@ -1,4 +1,5 @@
 export const BOARD_SIZE = 8;
+export type BoardSize = 6 | 8;
 export type Player = "black" | "white";
 export type Cell = Player | null;
 export type Board = Cell[][];
@@ -10,15 +11,27 @@ export interface MoveResult {
   flipped: { row: number; col: number }[]; // 現在は常に空（ひっくり返しなし）
 }
 
-export function createInitialBoard(): Board {
-  const board: Board = Array(BOARD_SIZE)
+export function createInitialBoard(size: BoardSize = 8): Board {
+  const board: Board = Array(size)
     .fill(null)
-    .map(() => Array(BOARD_SIZE).fill(null));
-  board[3][3] = "white";
-  board[3][4] = "black";
-  board[4][3] = "black";
-  board[4][4] = "white";
+    .map(() => Array(size).fill(null));
+  const h = size / 2 - 1;
+  board[h][h] = "white";
+  board[h][h + 1] = "black";
+  board[h + 1][h] = "black";
+  board[h + 1][h + 1] = "white";
   return board;
+}
+
+export function getTurnLimit(size: BoardSize): number {
+  return size === 6 ? 34 : 62;
+}
+
+export function determineWinner(board: Board): Player | "draw" {
+  const { black, white } = countPieces(board);
+  if (black > white) return "black";
+  if (white > black) return "white";
+  return "draw";
 }
 
 /**
@@ -33,7 +46,8 @@ export function applyMove(
   col: number,
   player: Player
 ): MoveResult {
-  if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) {
+  const size = board.length;
+  if (row < 0 || row >= size || col < 0 || col >= size) {
     return { newBoard: board, replaced: false, valid: false, flipped: [] };
   }
   if (board[row][col] === player) {
@@ -56,8 +70,9 @@ export function findNearestValidCell(
   player: Player
 ): { row: number; col: number } | null {
   const candidates: { row: number; col: number; dist: number }[] = [];
-  for (let r = 0; r < BOARD_SIZE; r++) {
-    for (let c = 0; c < BOARD_SIZE; c++) {
+  const size = board.length;
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
       if (r === row && c === col) continue;
       if (board[r][c] !== player) {
         const dr = r - row, dc = c - col;
@@ -107,8 +122,9 @@ export function getCPUMove(
   const opponentCells: { row: number; col: number }[] = [];
   const emptyCells: { row: number; col: number }[] = [];
 
-  for (let r = 0; r < BOARD_SIZE; r++) {
-    for (let c = 0; c < BOARD_SIZE; c++) {
+  const size = board.length;
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
       if (board[r][c] === opponent) opponentCells.push({ row: r, col: c });
       else if (board[r][c] === null) emptyCells.push({ row: r, col: c });
     }

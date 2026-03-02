@@ -5,7 +5,7 @@ import Link from "next/link";
 import GameCanvas, { GameCanvasHandle } from "@/components/GameCanvas";
 import { supabase, isSupabaseConfigured } from "@/lib/supabaseClient";
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import type { Player } from "@/lib/gameLogic";
+import type { Player, BoardSize } from "@/lib/gameLogic";
 
 type OnlineState =
   | "menu"
@@ -17,7 +17,7 @@ type OnlineState =
 
 type GameMessage =
   | { type: "guest_joined" }
-  | { type: "game_start"; guestColor: Player }
+  | { type: "game_start"; guestColor: Player; boardSize: BoardSize }
   | { type: "move"; row: number; col: number };
 
 function generateRoomCode(): string {
@@ -31,6 +31,8 @@ export default function OnlinePage() {
   const [myColor, setMyColor] = useState<Player>("black");
   const [errorMsg, setErrorMsg] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
+  const [selectedSize, setSelectedSize] = useState<BoardSize>(6);
+  const [gameBoardSize, setGameBoardSize] = useState<BoardSize>(6);
 
   const channelRef = useRef<RealtimeChannel | null>(null);
   const isHostRef = useRef(false);
@@ -74,8 +76,9 @@ export default function OnlinePage() {
           channel.send({
             type: "broadcast",
             event: "game",
-            payload: { type: "game_start", guestColor: "white" } as GameMessage,
+            payload: { type: "game_start", guestColor: "white", boardSize: selectedSize } as GameMessage,
           });
+          setGameBoardSize(selectedSize);
           setMyColor("black");
           setOnlineState("playing");
         } else if (payload.type === "move") {
@@ -116,6 +119,7 @@ export default function OnlinePage() {
       .on("broadcast", { event: "game" }, ({ payload }: { payload: GameMessage }) => {
         if (payload.type === "game_start") {
           setMyColor(payload.guestColor);
+          setGameBoardSize(payload.boardSize);
           setRoomCode(inputCode);
           setOnlineState("playing");
         } else if (payload.type === "move") {
@@ -161,6 +165,8 @@ export default function OnlinePage() {
     setInputCode("");
     setErrorMsg("");
     setStatusMsg("");
+    setSelectedSize(6);
+    setGameBoardSize(6);
   };
 
   // ============================================================
@@ -221,6 +227,27 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...`}
           {onlineState === "opponent_left" && (
             <p className="text-red-400 text-sm">相手が退出しました</p>
           )}
+
+          {/* 盤面サイズ選択 */}
+          <div className="w-full bg-green-900 rounded-2xl p-4 shadow-lg">
+            <p className="text-white font-bold text-sm mb-2">盤面サイズ（部屋を作る人が選択）</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setSelectedSize(6)}
+                className={`flex-1 py-3 rounded-xl font-bold text-lg transition-all ${selectedSize === 6 ? "bg-green-500 text-white" : "bg-green-800 text-green-300"}`}
+              >
+                6×6
+                <p className="text-xs font-normal opacity-80">34手</p>
+              </button>
+              <button
+                onClick={() => setSelectedSize(8)}
+                className={`flex-1 py-3 rounded-xl font-bold text-lg transition-all ${selectedSize === 8 ? "bg-blue-500 text-white" : "bg-green-800 text-green-300"}`}
+              >
+                8×8
+                <p className="text-xs font-normal opacity-80">62手</p>
+              </button>
+            </div>
+          </div>
 
           {/* 部屋を作る */}
           <button
@@ -294,6 +321,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...`}
             ref={gameRef}
             mode="online"
             myColor={myColor}
+            boardSize={gameBoardSize}
             onMove={sendMove}
           />
         </div>
