@@ -42,6 +42,8 @@ export interface GameCanvasProps {
   playerCount?: 2 | 3;
   onMove?: (row: number, col: number, player: Player) => void;
   onTurnChange?: (newPlayer: Player) => void;
+  /** ホストがonMoveを中継すべきプレイヤー（切断→CPU代打中の色） */
+  relayPlayers?: Player[];
 }
 
 const SENSITIVITY_SCALE: Record<Sensitivity, number> = {
@@ -284,7 +286,7 @@ function lerp(a: number, b: number, t: number) {
 // GameCanvas コンポーネント
 // ============================================================
 const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
-  function GameCanvas({ mode, myColor = "black", boardSize = 6, sensitivity = 1, difficulty = "normal", playerCount = 2, onMove, onTurnChange }, ref) {
+  function GameCanvas({ mode, myColor = "black", boardSize = 6, sensitivity = 1, difficulty = "normal", playerCount = 2, onMove, onTurnChange, relayPlayers = [] }, ref) {
     const velocityScale = SENSITIVITY_SCALE[sensitivity];
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -351,6 +353,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     useEffect(() => { onMoveRef.current = onMove; }, [onMove]);
     const onTurnChangeRef = useRef(onTurnChange);
     useEffect(() => { onTurnChangeRef.current = onTurnChange; }, [onTurnChange]);
+    const relayPlayersRef = useRef<Player[]>(relayPlayers);
+    useEffect(() => { relayPlayersRef.current = relayPlayers; }, [relayPlayers]);
 
     // ============================================================
     // レイアウト計算
@@ -558,8 +562,8 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           });
         }
 
-        // online: 最終着弾マスが確定したここで送信（playerも含めて送る）
-        if (mode === "online" && player === myColor) {
+        // online: 最終着弾マスが確定したここで送信（自分の手 or CPU代打中のプレイヤー）
+        if (mode === "online" && (player === myColor || relayPlayersRef.current.includes(player))) {
           onMoveRef.current?.(row, col, player);
         }
 
@@ -729,7 +733,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
               const next = getNextPlayer(anim.player, playerCountRef.current);
               currentPlayerRef.current = next;
               gamePhaseRef.current = "idle";
-              if (mode === "online" && anim.player === myColor) {
+              if (mode === "online" && (anim.player === myColor || relayPlayersRef.current.includes(anim.player))) {
                 onMoveRef.current?.(-1, -1, anim.player);
               }
               onTurnChangeRef.current?.(next);

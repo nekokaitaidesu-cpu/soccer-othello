@@ -58,6 +58,7 @@ export default function OnlinePage() {
   const [gamePlayerCount, setGamePlayerCount] = useState<2 | 3>(2);
   const [sensitivity, setSensitivity] = useState<Sensitivity>(1);
   const [disconnectedMsg, setDisconnectedMsg] = useState("");
+  const [disconnectedColors, setDisconnectedColors] = useState<Player[]>([]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const peerRef = useRef<any>(null);
@@ -92,16 +93,10 @@ export default function OnlinePage() {
   const triggerCPUForDisconnected = useCallback((cpuColor: Player) => {
     const board: Board | undefined = gameRef.current?.getBoard();
     if (!board) return;
-    const bs = board.length;
-    // かんたん（完全ランダム）
-    const row = Math.floor(Math.random() * bs);
-    const col = Math.floor(Math.random() * bs);
-    // 自分のキャンバスに適用
-    gameRef.current?.applyExternalMove(row, col, cpuColor);
-    // 相手ゲストに送信
-    const msg: GameMessage = { type: "move", row, col, player: cpuColor };
-    conn1Ref.current?.send(msg);
-    conn2Ref.current?.send(msg);
+    const move = getCPUMove(board, cpuColor);
+    if (!move) return;
+    // applyExternalMoveを呼ぶだけ。onMove経由でrelayPlayersに含まれていればsendMoveが自動で呼ばれる
+    gameRef.current?.applyExternalMove(move.row, move.col, cpuColor);
   }, []);
 
   // ターン変更コールバック（切断プレイヤーのターンならCPU代替）
@@ -125,6 +120,7 @@ export default function OnlinePage() {
   // ============================================================
   const handleGuestDisconnect = useCallback((leftColor: Player) => {
     disconnectedColorsRef.current = [...disconnectedColorsRef.current, leftColor];
+    setDisconnectedColors([...disconnectedColorsRef.current]);
     const remainingConns = [conn1Ref.current, conn2Ref.current].filter(Boolean).length;
     if (remainingConns === 0) {
       setOnlineState("opponent_left");
@@ -198,7 +194,10 @@ export default function OnlinePage() {
     });
 
     conn.on("close", () => {
-      handleGuestDisconnect(assignedColor);
+      // ゲーム中の切断のみCPU代打。ゲーム前（waiting_2など）の切断は無視
+      if (onlineStateRef.current === "playing") {
+        handleGuestDisconnect(assignedColor);
+      }
     });
 
     conn.on("error", () => {
@@ -222,7 +221,9 @@ export default function OnlinePage() {
     });
 
     conn.on("close", () => {
-      handleGuestDisconnect(assignedColor);
+      if (onlineStateRef.current === "playing") {
+        handleGuestDisconnect(assignedColor);
+      }
     });
 
     conn.on("error", () => {
@@ -357,6 +358,7 @@ export default function OnlinePage() {
     setGamePlayerCount(2);
     setSensitivity(1);
     setDisconnectedMsg("");
+    setDisconnectedColors([]);
   };
 
   // ============================================================
@@ -539,6 +541,7 @@ export default function OnlinePage() {
             sensitivity={sensitivity}
             onMove={sendMove}
             onTurnChange={handleTurnChange}
+            relayPlayers={disconnectedColors}
           />
         </div>
       )}
