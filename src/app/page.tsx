@@ -39,7 +39,7 @@ export default function HomePage() {
 
       {/* ルール説明 */}
       <div className="mt-10 max-w-xs text-green-300 text-xs text-center leading-relaxed">
-        <p>ボールを投げてコマを置く。相手のコマに当たると弾き飛ばして自分のコマに。盤が埋まったらコマが多い方の勝ち！</p>
+        <p>ボールを投げてコマを置く。相手のコマに当たると弾き飛ばして自分のコマに。所定の手数を投げ終わったら、コマが多い方の勝ち！</p>
       </div>
     </div>
   );
