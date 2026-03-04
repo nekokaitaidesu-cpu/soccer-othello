@@ -9,6 +9,28 @@ import { getCPUMove } from "@/lib/gameLogic";
 import type { DataConnection } from "peerjs";
 
 const PEER_PREFIX = "soc-";
+
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+  ],
+};
 const CPU_THINK_DELAY = 700;
 
 // ターン順ヘルパー（gameLogicのgetNextPlayerと同じロジック）
@@ -242,7 +264,7 @@ export default function OnlinePage() {
     isHostRef.current = true;
 
     const { default: Peer } = await import("peerjs");
-    const peer = new Peer(`${PEER_PREFIX}${code}`);
+    const peer = new Peer(`${PEER_PREFIX}${code}`, { config: ICE_SERVERS });
     peerRef.current = peer;
 
     peer.on("error", (err: { type?: string }) => {
@@ -317,7 +339,7 @@ export default function OnlinePage() {
     setOnlineState("joining");
 
     const { default: Peer } = await import("peerjs");
-    const peer = new Peer();
+    const peer = new Peer("", { config: ICE_SERVERS });
     peerRef.current = peer;
 
     peer.on("open", () => {
